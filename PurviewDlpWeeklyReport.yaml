@@ -1,0 +1,376 @@
+Descriptor:
+  Name: PurviewDlpWeeklyReport
+  DisplayName: Purview DLP Weekly Report
+  Description: >-
+    Microsoft Purview の DLP（データ損失防止）アクティビティを、Defender Advanced Hunting の
+    CloudAppEvents テーブルから KQL で週次集計し、視認性の高い HTML/CSS レポートを Azure Logic App
+    経由でメール配信するカスタムエージェントです。CloudAppEvents の Purview 監査ログ
+    （RawEventData.Operation = DLPRuleMatch / DLPRuleUndo 等）を条件に、適用された秘密度ラベル、
+    検出された機密情報の種類（SIT）、および持ち出し経路（SharePoint / OneDrive / Teams / Exchange
+    などのクラウドサービス、USB・印刷などのエンドポイント経路）を判別します。対象期間・
+    エグゼクティブサマリー（前週比較）・DLP アラート集計（ラベル別／機密情報の種類別／持ち出し経路別／
+    ユーザー分析 Top10）を含む、事実ベースの日本語 HTML レポートを生成します。
+  Settings:
+    - Name: LogicAppSubscriptionId
+      Label: Logic App Subscription ID
+      Description: レポートメールを送信する Logic App が存在する Azure サブスクリプション ID
+      HintText: "例: 00000000-0000-0000-0000-000000000000"
+      SettingType: String
+      Required: true
+    - Name: LogicAppResourceGroup
+      Label: Logic App Resource Group
+      Description: レポートメール送信用 Logic App が属するリソースグループ名
+      HintText: "例: ispf-resourcegroup"
+      SettingType: String
+      Required: true
+    - Name: LogicAppWorkflowName
+      Label: Logic App Workflow Name
+      Description: レポートメールを送信する Logic App ワークフロー名
+      HintText: "例: PluginLogicApp_PurviewDlpWeeklyReport"
+      SettingType: String
+      Required: true
+
+AgentDefinitions:
+  - Name: PurviewDlpWeeklyReportAgent
+    DisplayName: Purview DLP Weekly Report Agent
+    Description: >-
+      Purview の DLP アクティビティを Defender の CloudAppEvents から週次集計し、
+      対象期間・エグゼクティブサマリー（前週比較）・DLP アラート集計（秘密度ラベル別／
+      機密情報の種類別／持ち出し経路別／ユーザー分析 Top10）を含む HTML レポートを生成して
+      Logic App 経由でメール送信します。
+    Publisher: Custom
+    Product: Security
+    RequiredSkillsets:
+      - PurviewDlpWeeklyReport
+    AgentSingleInstanceConstraint: Workspace
+    Triggers:
+      - Name: WeeklySchedule
+        DefaultPollPeriodSeconds: 604800
+        FetchSkill: ''
+        ProcessSkill: PurviewDlpWeeklyReport.OrchestratePurviewDlpWeeklyReport
+
+SkillGroups:
+  # ─────────────────────────────────────────────────
+  # Agent Orchestration Skill
+  # ─────────────────────────────────────────────────
+  - Format: Agent
+    Skills:
+      - Name: OrchestratePurviewDlpWeeklyReport
+        DisplayName: Orchestrate Purview DLP Weekly Report
+        Description: >-
+          過去 7 日間（前週比のため過去 14 日間）の Purview DLP アクティビティを
+          Defender の CloudAppEvents から収集・集計し、視認性の高い HTML レポートを生成して
+          Logic App 経由でメール送信します。
+        Interfaces:
+          - Agent
+        Settings:
+          Model: gpt-4o
+          Instructions: |-
+            # ミッション
+            あなたは Microsoft Purview の DLP（データ損失防止）週次レポートを作成する
+            セキュリティ アナリスト エージェントです。過去 7 日間（前週比のため過去 14 日間）の
+            DLP アクティビティを Microsoft Defender の Advanced Hunting テーブル CloudAppEvents から
+            収集・集計し、視認性の高い自己完結型 HTML レポートを生成して、Logic App 経由で
+            メール送信します。
+            レポートのすべてのテキストは**日本語**で記述してください。
+            英語のデータ（ユーザー名、ラベル ID、アプリ名、ワークロード名等）はそのまま使用します。
+
+            # 重要ルール
+            - **複数スキルを並列で呼び出さないこと。** 必ず一度に一つのスキルのみを呼び出し、
+              レスポンスを受け取ってから次のスキルを呼び出す。
+            - スキル呼び出しが失敗またはエラーを返した場合はリトライせず、
+              そのセクションに「データ取得不可」と明記して次に進む。
+            - ChildSkills に列挙されたスキルのみを呼び出す。
+            - **事実のみを報告すること。** 推測は「※ 推定:」と明記する。
+            - **データが取得できなかった場合は「データなし」と記載し、架空のデータを生成しない。**
+            - **HTML レポートは必ず SendDlpReportEmail スキルの ReportHtml パラメーターに渡して
+              メール送信すること。** HTML をチャット/最終出力にそのまま貼り付けて終了してはならない。
+              レポートの配信手段はメールのみである。
+            - CloudAppEvents に DLP レコードが 1 件も存在しない場合は、HTML レポート冒頭に
+              「対象期間に Purview DLP の監査レコードが CloudAppEvents に見つかりませんでした。
+              M365 監査ログの Defender for Cloud Apps への取り込み、および DLP ポリシーの稼働を
+              確認してください。」という注意バナーを表示すること。
+
+            # 対象データと判別条件（CloudAppEvents）
+            - DLP アラートイベント: `RawEventData.Operation` が `DLPRuleMatch` / `DLPRuleUndo` のレコード
+            - 適用された秘密度ラベル: ワークロード別メタデータ
+              （SharePoint/OneDrive は `RawEventData.SharePointMetaData.SensitivityLabelNames` /
+              `.SensitivityLabelIds`。`RawEventData.SensitivityLabelId` は DLP レコードでは空のことが多い）
+            - 機密情報の種類（SIT）: `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName`
+              （例: Credit Card Number）
+            - 持ち出し経路: `RawEventData.Workload` / `Application`
+              （SharePoint / OneDrive / Teams / Exchange 等のクラウドサービス）、および
+              エンドポイント経路（USB リムーバブルメディア / 印刷など）
+            - ブロック / 検知の判定: DLP ルールのアクション（`PolicyDetails[].Rules[].Actions`）に基づく
+              （`BlockAccess` 等=ブロック、`GenerateAlert` 等=検知/監査）。各スキルの Verdict 列を使用する。
+
+            # ワークフロー
+
+            ## フェーズ 1: データ収集
+            1. **GetDlpDetectionSummary** を呼び出し、過去 14 日間の DLP アラート数を
+               週（今週 / 前週）× 判定（ブロック / 検知）× ワークロード × 適用ラベル別に取得する。
+               → 対象期間の件数・エグゼクティブサマリーの前週比較・ラベル毎の集計に使用する。
+            2. **GetDlpBySensitiveInfoType** を呼び出し、検出された機密情報の種類（SIT）別の
+               検知数を、週（今週 / 前週）× 判定別に取得する。
+            3. **GetDlpByEgressChannel** を呼び出し、持ち出し経路（クラウドサービス／
+               USB／印刷など）別の検知数・判定・主な適用ラベルを、週（今週 / 前週）別に取得する。
+            4. **GetDlpByUserAndLabel** を呼び出し、ユーザー × 適用ラベル別の DLP アラート数
+               （ブロック / 検知）を Top 10 で取得する。→ ユーザー分析に使用する。
+
+            ## フェーズ 2: インサイトの統合
+            収集データから以下を算出・解釈する:
+              - 総アラート数、ブロック数、検知（監査）数と前週比（%）
+              - 最も多いラベル・機密情報の種類・持ち出し経路
+              - 先週から今週への傾向変化（増減、新規に出現した経路・SIT・ラベル）
+              - 総合リスク判定（改善 / 安定 / 悪化 / 要注意）
+
+            ## フェーズ 3: HTML レポートの生成
+            自己完結型の HTML レポートを生成する。CSS はすべて `<style>` タグ内にインラインで記述し、
+            外部リソースや JavaScript は使用しない。チャートは CSS のみ（flexbox・比例幅の棒）で描画する。
+            すべてのテキストは日本語で記述する。データがない項目は「データなし」と明記する。
+
+            ### HTML レポート構成（PurviewReport.md の項目順）
+
+            #### ヘッダー
+            - タイトル: 「Purview DLP 週次レポート」
+            - 対象期間（今週の日付範囲）、生成日時、データソース: Defender CloudAppEvents
+
+            #### 1. 対象期間
+            対象期間（今週の開始〜終了）、前週比較期間、生成日時を表で表示する。
+            今週／前週の総アラート数（ブロック / 検知）も併記する。
+
+            #### 2. エグゼクティブサマリー
+            先週と今週を比較し、DLP アラートの傾向を 4〜6 文で記載する。
+            - 総アラート数の前週比（増減 %）と方向感（▲赤 / ▼緑 / →グレー）
+            - ブロック / 検知の比率とその変化
+            - 最も注目すべき変化（ラベル・機密情報の種類・持ち出し経路のいずれか）
+            - 総合リスク判定バナー（改善 / 安定 / 悪化 / 要注意）を色付きで表示
+
+            #### 3. DLP アラート 集計
+            以下の 3 つの集計を表示する。**各集計には必ず 2〜3 行の傾向コメントを添える。**
+
+            ##### 3-1. Microsoft Purview ラベル毎の集計
+            ラベル | 今週 | 前週 | 増減 | ブロック | 検知 のテーブルと横棒グラフ（CSS）。
+            傾向コメント（2〜3 行）: 最多ラベル、前週比の変化、ブロック比率など。
+
+            ##### 3-2. Microsoft Purview 機密情報の種類（SIT）毎の集計
+            機密情報の種類 | 今週 | 前週 | 増減 | ブロック | 検知 のテーブルと横棒グラフ（CSS）。
+            傾向コメント（2〜3 行）: 最多の機密情報の種類、急増した種類、前週にない新規 SIT など。
+
+            ##### 3-3. 持ち出し経路分析
+            持ち出し経路（SharePoint / OneDrive / Teams / Exchange / USB / 印刷 など）|
+            今週 | 前週 | ブロック | 検知 | 主なラベル のテーブルと横棒グラフ（CSS）。
+            傾向コメント（2〜3 行）: 最も多い経路、クラウド vs エンドポイントの比率、
+            新規に出現した経路など。
+
+            ##### 3-4. ユーザー分析（Top 10）
+            ユーザー | 適用ラベル | 検知数 | ブロック | 検知 のテーブル（検知数降順で Top 10）と
+            横棒グラフ（CSS）。上位 3 行は強調する。
+            傾向コメント（2〜3 行）: 特定のユーザーに偏っていないか、同一ユーザーが複数ラベルで
+            検知されていないか、ブロックが多発しているユーザーはいないかなど。
+            ※ ユーザー値が「（ポリシー管理者/通知先）」または「（システム）」と表示されている場合は、
+            対象の DLP アラートが**対話的なユーザー操作ではなく**、SharePoint のイベントベース
+            コンテンツスキャン（システム契機）による検知であることをコメントで補足する。
+            実ユーザー UPN はエンドポイント/メール DLP など対話的な操作のイベントで・すべき発生することも追記する。
+
+            #### フッター
+            - 「本レポートは Security Copilot エージェントにより自動生成されました。」
+            - データソース: Defender CloudAppEvents（Purview DLP 監査ログ）
+            - 生成日時、機密表示
+
+            ### CSS スタイル要件
+            - フォント: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', system-ui, sans-serif
+            - 背景色: #f5f5f5、カード背景: #ffffff、プライマリ: #0078D4
+            - 判定パレット: ブロック=#D13438、検知=#FF8C00
+            - 判定バナー: 改善=#107C10、安定=#0078D4、悪化=#FF8C00、要注意=#D13438
+            - カードシャドウ: 0 2px 8px rgba(0,0,0,0.08)、レスポンシブ（max-width: 900px）、@media print 対応
+
+            ## フェーズ 4: メール送信（必須・最終ステップ）
+            4. 生成した HTML レポートの**全文**を、**SendDlpReportEmail** スキルの
+               `ReportHtml` パラメーターに渡して呼び出す。
+               - `ReportHtml` には `<!DOCTYPE html>` から `</html>` までの完全な HTML 文字列を渡す。
+                 一部の抜粋・要約・省略（「...」等）をしてはならない。
+               - HTML 内の CSS は `<style>` タグ内にインラインで含める（外部参照は不可）。
+               - このスキル呼び出しは**必須**であり、省略・スキップしてはならない。
+               - たとえデータが無い場合でも、注意バナー付きの HTML を生成し、必ず送信する。
+               - SendDlpReportEmail がエラーを返した場合のみ、出力にその旨を明記する。
+
+            # 出力
+            **必ず SendDlpReportEmail を呼び出した後に**、メール送信の結果ステータスと、
+            3 行のサマリ（総アラート数 / ブロック数 / 主要ラベル・機密情報の種類・持ち出し経路と
+            1 文のリスク判定根拠）を日本語で返す。HTML 本文は出力に含めない（メールで配信済みのため）。
+        ChildSkills:
+          - GetDlpDetectionSummary
+          - GetDlpBySensitiveInfoType
+          - GetDlpByEgressChannel
+          - GetDlpByUserAndLabel
+          - SendDlpReportEmail
+
+  # ─────────────────────────────────────────────────
+  # KQL Skills — Defender Advanced Hunting (CloudAppEvents)
+  # ─────────────────────────────────────────────────
+  - Format: KQL
+    Skills:
+      # ---- アクティビティ検知数（週 × 判定 × ワークロード × ラベル） ----
+      - Name: GetDlpDetectionSummary
+        DisplayName: Get DLP Detection Summary
+        Description: >-
+          CloudAppEvents の Purview DLP 監査レコード（RawEventData.Operation =
+          DLPRuleMatch / DLPRuleUndo）を、過去 14 日間で 週（今週 / 前週）× 判定（ブロック / 検知）×
+          ワークロード × 適用ラベル別に集計します。
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            CloudAppEvents
+            | where Timestamp > ago(14d)
+            | extend Operation = tostring(RawEventData.Operation)
+            | where Operation in (dlpOps)
+            | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
+            | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
+            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
+                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
+                                  isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
+                                  "ラベルなし/不明")
+            | extend RawStr = tostring(RawEventData)
+            | extend Verdict = iff(RawStr has "BlockAccess"
+                                   or RawStr has "\"Mode\":\"Block\""
+                                   or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
+            | summarize Detections = count() by Week, Verdict, Workload, Label
+            | sort by Detections desc
+            | take 200
+
+      # ---- 機密情報の種類（SIT）毎の集計 ----
+      - Name: GetDlpBySensitiveInfoType
+        DisplayName: Get DLP Detections by Sensitive Information Type
+        Description: >-
+          CloudAppEvents の Purview DLP アラート（DLPRuleMatch / DLPRuleUndo）を、検出された
+          機密情報の種類（SIT）別に、週（今週 / 前週）× 判定（ブロック / 検知）で集計します。SIT は
+          RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[] から抽出します。
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            CloudAppEvents
+            | where Timestamp > ago(14d)
+            | where tostring(RawEventData.Operation) in (dlpOps)
+            | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
+            | extend RawStr = tostring(RawEventData)
+            | extend Verdict = iff(RawStr has "BlockAccess"
+                                   or RawStr has "\"Mode\":\"Block\""
+                                   or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
+            | mv-expand PD = RawEventData.PolicyDetails
+            | mv-expand Rule = PD.Rules
+            | mv-expand SI = Rule.ConditionsMatched.SensitiveInformation
+            | extend SensitiveInfoType = tostring(SI.SensitiveInformationTypeName)
+            | where isnotempty(SensitiveInfoType)
+            | summarize Detections = dcount(ReportId) by Week, Verdict, SensitiveInfoType
+            | sort by Detections desc
+            | take 200
+
+      # ---- 持ち出し経路分析（クラウドサービス / USB / 印刷） ----
+      - Name: GetDlpByEgressChannel
+        DisplayName: Get DLP Detections by Egress Channel
+        Description: >-
+          CloudAppEvents の Purview DLP アラートを、持ち出し経路（SharePoint / OneDrive / Teams /
+          Exchange などのクラウドサービス、および USB リムーバブルメディア・印刷などのエンドポイント経路）別に
+          週（今週 / 前週）で集計し、判定（ブロック / 検知）と主な適用ラベルを併記します。
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            CloudAppEvents
+            | where Timestamp > ago(14d)
+            | where tostring(RawEventData.Operation) in (dlpOps)
+            | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
+            | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
+            | extend RawStr = tostring(RawEventData)
+            | extend EgressChannel = case(
+                Workload has "SharePoint", "SharePoint",
+                Workload has "OneDrive", "OneDrive",
+                Workload has "Teams", "Teams",
+                Workload has "Exchange", "Exchange (メール)",
+                Workload has "Endpoint" and (RawStr has "RemovableMedia" or RawStr has "USB"), "USB/リムーバブルメディア",
+                Workload has "Endpoint" and RawStr has "Print", "印刷",
+                Workload has "Endpoint", "エンドポイント (その他)",
+                Workload)
+            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
+                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
+                                  "ラベルなし/不明")
+            | extend Verdict = iff(RawStr has "BlockAccess"
+                                   or RawStr has "\"Mode\":\"Block\""
+                                   or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
+            | summarize Detections = count(),
+                        BlockCount = countif(Verdict == "ブロック"),
+                        DetectCount = countif(Verdict == "検知"),
+                        Labels = make_set(Label, 8)
+              by Week, EgressChannel
+            | sort by Detections desc
+            | take 100
+
+      # ---- ユーザー分析（ユーザー × ラベル、Top 10） ----
+      - Name: GetDlpByUserAndLabel
+        DisplayName: Get DLP Detections by User and Label (Top 10)
+        Description: >-
+          CloudAppEvents の Purview DLP アラート（DLPRuleMatch / DLPRuleUndo）を、ユーザー ×
+          適用秘密度ラベル別に集計し、検知数の多い順に Top 10 を返します。判定（ブロック / 検知）も
+          併記し、特定ユーザーへの偏りを把握します。ユーザーは実操作者（RawEventData.UserId /
+          AccountDisplayName）を優先し、値が APP@SHAREPOINT などのシステム/アプリプリンシパル
+          （SharePoint のイベントベースコンテンツスキャン等）の場合は、DLP ポリシーのアラート通知先
+          （GenerateAlert:<UPN>／ポリシー管理者）をラベル付きで補完します。
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            CloudAppEvents
+            | where Timestamp > ago(14d)
+            | where tostring(RawEventData.Operation) in (dlpOps)
+            | extend RawStr = tostring(RawEventData)
+            | extend ActorRaw = coalesce(AccountDisplayName, tostring(RawEventData.UserId), AccountId, "不明")
+            | extend AlertRecipient = extract(@"GenerateAlert:([^""\]]+)", 1, RawStr)
+            | extend User = case(
+                isnotempty(ActorRaw) and not(ActorRaw startswith "APP@") and ActorRaw != "不明", ActorRaw,
+                isnotempty(AlertRecipient), strcat(AlertRecipient, " (ポリシー管理者/通知先)"),
+                isnotempty(ActorRaw), strcat(ActorRaw, " (システム)"),
+                "不明")
+            | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
+            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
+                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
+                                  isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
+                                  "ラベルなし/不明")
+            | extend Verdict = iff(RawStr has "BlockAccess"
+                                   or RawStr has "\"Mode\":\"Block\""
+                                   or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
+            | summarize Detections = count(),
+                        BlockCount = countif(Verdict == "ブロック"),
+                        DetectCount = countif(Verdict == "検知"),
+                        Workloads = make_set(Workload, 8)
+              by User, Label
+            | sort by Detections desc
+            | take 10
+
+  # ─────────────────────────────────────────────────
+  # LogicApp Skill — HTML レポートのメール送信
+  # ─────────────────────────────────────────────────
+  - Format: LogicApp
+    Skills:
+      - Name: SendDlpReportEmail
+        DisplayName: Send Purview DLP Weekly Report Email
+        Description: >-
+          生成した HTML レポートを、Office 365 コネクタを持つ Azure Logic App 経由で
+          配信先メールボックスに送信します。
+        Inputs:
+          - Name: ReportHtml
+            Description: 送信する Purview DLP 週次レポートの HTML 全文
+            Required: true
+        Settings:
+          SubscriptionId: "{{LogicAppSubscriptionId}}"
+          ResourceGroup: "{{LogicAppResourceGroup}}"
+          WorkflowName: "{{LogicAppWorkflowName}}"
+          TriggerName: manual

@@ -1,2 +1,270 @@
-# SecurityCopilotAgent-PurviewDLPWeeklyReportAgent
-Purview の DLP アクティビティを Defender の CloudAppEvents から週次集計し、 対象期間・エグゼクティブサマリー（前週比較）・DLP アラート集計（秘密度ラベル別／ 機密情報の種類別／持ち出し経路別／ユーザー分析 Top10）を含む HTML レポートを生成して Logic App 経由でメール送信します。
+# Purview DLP Weekly Report — Security Copilot カスタムエージェント
+
+Microsoft Purview の DLP（データ損失防止）アクティビティを、Microsoft Defender の
+Advanced Hunting テーブル **`CloudAppEvents`** から KQL で**週次**集計し、視認性の高い
+**HTML/CSS レポート**を **Azure Logic App 経由でメール配信**する Security Copilot カスタムエージェントです。
+
+「秘密度ラベルが付与されたファイル」に対するユーザー操作・DLP 操作（ブロック／検知）を、
+Purview の監査ログ（`CloudAppEvents`）を基に集計し、**適用された秘密度ラベル**、
+**検出された機密情報の種類（SIT）**、**どのクラウドサービス・経路（SharePoint / OneDrive /
+Teams / Exchange / USB / 印刷など）**で操作が行われたか、**どのユーザーに偏っているか**を判別します。
+
+---
+
+## 情報の取得方法（要件）
+
+- Defender に対して **KQL** を用いて週次の統計を取得する。
+- **`CloudAppEvents`** を用い、Purview アラートに紐づく条件
+  （`RawEventData.Operation` = **`DLPRuleMatch` / `DLPRuleUndo`** 等）を適用して、
+  **適用ラベル**と**利用クラウドサービス**を判別する。
+- レポートは他エージェント同様、**HTML/CSS の視認性の高いレポート**を **Logic App 経由**で生成する。
+
+参考: [Investigate data loss prevention alerts with Microsoft Sentinel / Defender XDR](https://learn.microsoft.com/ja-jp/defender-xdr/dlp-investigate-alerts-sentinel)
+
+---
+
+## 使用テーブルとカラム
+
+### `CloudAppEvents`（Defender Advanced Hunting）
+
+> The **CloudAppEvents** table contains all audit logs across all locations like SharePoint,
+> OneDrive, Exchange and Devices. — [Investigate DLP alerts with Microsoft Defender XDR](https://learn.microsoft.com/defender-xdr/dlp-investigate-alerts-defender)
+
+`CloudAppEvents` は Microsoft 365 の統合監査ログ（Purview DLP 監査データを含む）を保持します。
+DLP や秘密度ラベルの詳細は、`RawEventData`（元の監査イベント JSON）内のフィールドに格納されます。
+
+本エージェントが使用する主なカラム／フィールド:
+
+| カラム / フィールド | 用途 |
+| --- | --- |
+| `Timestamp` | 対象期間フィルタ（週次） |
+| `RawEventData.Operation` | **DLP アラートの識別**（`DLPRuleMatch` / `DLPRuleUndo`） |
+| `RawEventData.SharePointMetaData.SensitivityLabelNames` / `.SensitivityLabelIds` | **適用された秘密度ラベル**（配列。DLP レコードでは `RawEventData.SensitivityLabelId` は空のためこちらを使用） |
+| `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName` | **検出された機密情報の種類（SIT）**（例: Credit Card Number） |
+| `RawEventData.PolicyDetails[].Rules[].Actions` | **ブロック / 検知の判定**（`BlockAccess`=ブロック、`GenerateAlert`=検知） |
+| `RawEventData.Workload` / `Application` | **ワークロード／利用クラウドサービス**（持ち出し経路分析） |
+| `AccountDisplayName` / `RawEventData.UserId` / `AccountId` | **ユーザー（実操作者）別集計**。システム/アプリプリンシパル（`APP@SHAREPOINT` 等）の場合はアラート通知先で補完 |
+| `RawEventData.PolicyDetails[].Rules[].ActionParameters`（`GenerateAlert:<UPN>`） | **DLP ポリシーのアラート通知先/管理者**（例: `admin@azurecsa.net`。トリガーした実ユーザーではない） |
+| `RawEventData.EvaluationSource` | DLP 評価の契機（例: `DlpPolicyEventBasedAssistantSharePoint` = SharePoint コンテンツスキャン） |
+| `RawEventData.PolicyDetails[].PolicyName` / `.Rules[].RuleName` / `.Rules[].Severity` | DLP ポリシー名・ルール名・重大度 |
+
+### ブロック / 検知の判定
+
+DLP ルール一致レコードのアクションに基づいて判定します。`RawEventData` の内容から、
+アクセス制御が実行された場合を「ブロック」、監査のみの場合を「検知」とします。
+
+```kusto
+| extend RawStr = tostring(RawEventData)
+| extend Verdict = iff(RawStr has "BlockAccess"
+                       or RawStr has "\"Mode\":\"Block\""
+                       or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
+```
+
+> **注意（ヒューリスティック判定）:** ブロック／検知の厳密な表現は、ワークロード（Exchange /
+> SharePoint / Endpoint）や DLP ポリシー構成によって `RawEventData` 内の格納形式が異なります。
+> 実レコード投入後に `RawEventData` の `PolicyDetails[].Rules[].Actions` や
+> `EndpointMetaData.EnforcementMode` を確認し、上記判定条件を調整してください。
+
+---
+
+## KQL スキル一覧
+
+すべて **Target: Defender**（Advanced Hunting）で `CloudAppEvents` を対象とし、
+週次（過去 7 日）と前週（過去 7〜14 日）の比較のため過去 14 日間を集計します。
+
+| スキル | 目的 | レポート項目 |
+| --- | --- | --- |
+| `GetDlpDetectionSummary` | 週（今週/前週）× 判定（ブロック/検知）× ワークロード × 適用ラベル別の DLP アラート数 | 1. 対象期間 / 2. エグゼクティブサマリー / 3-1. ラベル毎 |
+| `GetDlpBySensitiveInfoType` | 機密情報の種類（SIT）別の検知数（今週/前週 × 判定） | 3-2. 機密情報の種類毎 |
+| `GetDlpByEgressChannel` | 持ち出し経路（SharePoint/OneDrive/Teams/Exchange/USB/印刷）別の検知数・判定・ラベル | 3-3. 持ち出し経路分析 |
+| `GetDlpByUserAndLabel` | ユーザー × 適用ラベル別の DLP アラート数（ブロック/検知）、検知数降順 Top 10 | 3-4. ユーザー分析 |
+
+### DLP イベントの識別とラベル抽出
+
+DLP 検知イベントは `RawEventData.Operation` で識別し、ラベルはワークロード別メタデータから抽出します
+（DLP レコードでは `RawEventData.SensitivityLabelId` が空のため）。
+
+```kusto
+let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+CloudAppEvents
+| where Timestamp > ago(14d)
+| extend Operation = tostring(RawEventData.Operation)
+| where Operation in (dlpOps)
+| extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
+| extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+| extend SPLabelIds  = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+| extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
+                      isnotempty(SPLabelIds)  and SPLabelIds  != "[]", SPLabelIds,
+                      isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
+                      "ラベルなし/不明")
+```
+
+### 機密情報の種類（SIT）の抽出
+
+SIT は `RawEventData.PolicyDetails[]` を `mv-expand` で展開して抽出します。
+
+```kusto
+| mv-expand PD = RawEventData.PolicyDetails
+| mv-expand Rule = PD.Rules
+| mv-expand SI = Rule.ConditionsMatched.SensitiveInformation
+| extend SensitiveInfoType = tostring(SI.SensitiveInformationTypeName)   // 例: Credit Card Number
+```
+
+### 持ち出し経路の分類
+
+`RawEventData.Workload` と `RawEventData` 内のエンドポイント指標から経路を分類します。
+
+```kusto
+| extend EgressChannel = case(
+    Workload has "SharePoint", "SharePoint",
+    Workload has "OneDrive", "OneDrive",
+    Workload has "Teams", "Teams",
+    Workload has "Exchange", "Exchange (メール)",
+    Workload has "Endpoint" and (RawStr has "RemovableMedia" or RawStr has "USB"), "USB/リムーバブルメディア",
+    Workload has "Endpoint" and RawStr has "Print", "印刷",
+    Workload has "Endpoint", "エンドポイント (その他)",
+    Workload)
+```
+
+---
+
+## ⚠️ 前提条件と検証結果（本テナントでのライブ確認）
+
+指定環境（Entra ID テナント `76684a67-d816-43ce-93f9-29b6f72f823f`）で `CloudAppEvents` の状況を
+ライブ検証しました。
+
+| 項目 | 状況 |
+| --- | --- |
+| `CloudAppEvents` テーブル | **データあり**（直近 30 日で約 50 万行、2026-06-16 以降。Defender for Cloud Apps がオンボード済） |
+| **DLP レコード（`DLPRuleMatch`）** | **168 件を確認**（過去 14 日、Workload=`SharePoint`、App=`Microsoft SharePoint Online`） |
+| **機密情報の種類（SIT）** | **`Credit Card Number` を確認**（`PolicyDetails` を mv-expand して抽出） |
+| **ユーザー（実操作者）** | `APP@SHAREPOINT`（`RawEventData.UserId`）。これはアプリ名ではなく **SharePoint のシステム契機の実操作者**です（`EvaluationSource = DlpPolicyEventBasedAssistantSharePoint` = イベントベースのコンテンツスキャンであり、対話的なユーザー操作ではない） |
+| **`azurecsa.net` の UPN** | 全 168 件で `admin@azurecsa.net` のみ。これは `ActionParameters: ["GenerateAlert:admin@azurecsa.net"]` に由来する **DLP ポリシーのアラート通知先/管理者**であり、トリガーしたユーザーではありません |
+| DLP レコードの判定 | すべて `PolicyDetails[].Rules[].Actions = ["GenerateAlert"]`（＝**検知/監査**）。`BlockAccess`（ブロック）は未確認 |
+| DLP レコードの秘密度ラベル | `SharePointMetaData.SensitivityLabelIds/Names` は空配列（検証時のテストファイルにラベル未付与） |
+
+> 全 4 つの KQL スキル（`GetDlpDetectionSummary` / `GetDlpBySensitiveInfoType` /
+> `GetDlpByEgressChannel` / `GetDlpByUserAndLabel`）は、上記実データに対して実行検証済みです
+> （例: SIT=Credit Card Number 168 件、EgressChannel=SharePoint 168 件、ユーザー=APP@SHAREPOINT Top1）。
+
+### 実レコードの構造（検証で判明）
+
+DLP イベントの重要情報は `RawEventData` 内の**ワークロード別メタデータ**に格納されます。
+`RawEventData.SensitivityLabelId` は DLP レコードでは空のため、本エージェントは以下を参照します。
+
+| 情報 | 実際の格納先 |
+| --- | --- |
+| 秘密度ラベル | `RawEventData.SharePointMetaData.SensitivityLabelNames` / `.SensitivityLabelIds`（配列。Exchange/Endpoint は各メタデータ） |
+| ブロック/検知 | `RawEventData.PolicyDetails[].Rules[].Actions`（`GenerateAlert`=検知、`BlockAccess`=ブロック） |
+| ファイル名 | `RawEventData.SharePointMetaData.FileName` |
+| ワークロード / クラウドサービス | `RawEventData.Workload` / `Application` |
+| DLP ポリシー・ルール名・重大度 | `RawEventData.PolicyDetails[].PolicyName` / `.Rules[].RuleName` / `.Rules[].Severity` |
+| 検出された機密情報の種類 | `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName` |
+
+> 本テナントでは DLP 検知は「SharePoint 上のラベルなしファイルに対する監査（GenerateAlert）」が中心でした。
+> 秘密度ラベル付きファイルへのブロック運用を行うと、`SensitivityLabelNames` が埋まり、
+> `Actions` に `BlockAccess` が現れます。その状態で本エージェントはラベル別・ブロック/検知別に正しく集計します。
+
+### ユーザー分析のユーザー値について（重要）
+
+本テナントの DLP イベントはすべて **SharePoint のイベントベースコンテンツスキャン**
+（`EvaluationSource = DlpPolicyEventBasedAssistantSharePoint`）による検知で、実操作者は
+`APP@SHAREPOINT`（システム契機）です。対話的なユーザー UPN は存在しません。
+`admin@azurecsa.net` は **DLP ポリシーのアラート通知先（管理者）** であり、トリガーしたユーザーではありません。
+
+`GetDlpByUserAndLabel` はこの実態に合わせて、以下の優先順でユーザーを判定します（実データ検証済み）:
+
+1. **実操作者**（`RawEventData.UserId` / `AccountDisplayName`）— エンドポイント/メール DLP など
+   対話的な操作では実ユーザー UPN がここに入ります。
+2. 実操作者がシステム/アプリプリンシパル（`APP@` で始まる）の場合 → **アラート通知先**
+   （`GenerateAlert:<UPN>` から抽出した `admin@azurecsa.net` 等を「（ポリシー管理者/通知先）」付きで表示）。
+3. いずれもなければ → 「（システム）」として表示。
+
+```kusto
+| extend ActorRaw = coalesce(AccountDisplayName, tostring(RawEventData.UserId), AccountId, "不明")
+| extend AlertRecipient = extract(@"GenerateAlert:([^""\]]+)", 1, tostring(RawEventData))
+| extend User = case(
+    isnotempty(ActorRaw) and not(ActorRaw startswith "APP@") and ActorRaw != "不明", ActorRaw,
+    isnotempty(AlertRecipient), strcat(AlertRecipient, " (ポリシー管理者/通知先)"),
+    isnotempty(ActorRaw), strcat(ActorRaw, " (システム)"),
+    "不明")
+```
+
+> DLP レコードが 1 件も見つからない場合、本エージェントは HTML レポート冒頭に注意バナーを表示し、
+> 各セクションに「データなし」を明記します（架空データは生成しません）。
+
+---
+
+## レポート項目（出力構成）
+
+PurviewReport.md で定義された順序で HTML レポートを生成します。
+
+1. **対象期間** — 今週の対象期間・前週比較期間・生成日時・今週/前週の総アラート数
+2. **エグゼクティブサマリー** — 先週と今週を比較し、DLP アラートの傾向を記載（前週比・ブロック/検知比率・総合リスク判定バナー）
+3. **DLP アラート 集計**（各集計に 2〜3 行の傾向コメントを付与）
+   - 3-1. **Microsoft Purview ラベル毎の集計**
+   - 3-2. **Microsoft Purview 機密情報の種類（SIT）毎の集計**
+   - 3-3. **持ち出し経路分析**（SharePoint / OneDrive / Teams / Exchange / USB / 印刷 など）
+   - 3-4. **ユーザー分析**（ユーザー × ラベル、Top 10）
+
+---
+
+## エージェント構成
+
+- **種別**: スケジュール実行エージェント（`Interfaces: [Agent]`、`WeeklySchedule` トリガー = 604800 秒）
+- **モデル**: `gpt-4o`
+- **子スキル**: 4 つの KQL スキル（CloudAppEvents）＋ 1 つの LogicApp スキル
+- **RequiredSkillsets**: `PurviewDlpWeeklyReport`（本マニフェスト自身のインラインスキル）
+- **出力**: 自己完結型 HTML レポート（インライン CSS、外部リソース・JavaScript 不使用）を
+  `SendDlpReportEmail`（Logic App）でメール配信
+
+> レポート生成・HTML 整形・要約・推奨はエージェント本体（GPT）が Instructions に従って実施するため、
+> 別途 GPT 子スキルは作成していません。
+
+---
+
+## Logic App（メール送信）
+
+同梱の [PurviewDlpWeeklyReport_LogicApp_ARM.json](PurviewDlpWeeklyReport_LogicApp_ARM.json) を
+デプロイすると、HTTP トリガー（`manual`）で受け取った `ReportHtml` を Office 365 コネクタで
+メール送信する Logic App が作成されます。
+
+- トリガー: `manual`（HTTP Request）— ボディに `ReportHtml` を受け取る
+- アクション: **Parse JSON**（`ReportHtml` を抽出）→ **Send an email (V2)**（`Body` に HTML を設定）
+- デプロイ後、Office 365 API 接続の認可（配信元メールボックス）を完了させてください。
+- Logic App の **サブスクリプション ID / リソースグループ / ワークフロー名** を、
+  プラグイン設定（`LogicAppSubscriptionId` / `LogicAppResourceGroup` / `LogicAppWorkflowName`）に設定します。
+
+---
+
+## デプロイ手順
+
+1. [PurviewDlpWeeklyReport_LogicApp_ARM.json](PurviewDlpWeeklyReport_LogicApp_ARM.json) を
+   対象リソースグループ（例: `ispf-resourcegroup`）へデプロイし、Office 365 接続を認可、
+   送信先・件名を設定する。
+2. Security Copilot の **プラグイン管理**で
+   [PurviewDlpWeeklyReport.yaml](PurviewDlpWeeklyReport.yaml) をカスタムプラグインとしてアップロードする。
+3. プラグイン設定に Logic App の **サブスクリプション ID / リソースグループ / ワークフロー名**を入力する。
+4. **アクティブエージェント**でエージェントをセットアップ（認証）する。
+5. 週次スケジュールで自動実行、または手動でレポートを生成・送信する。
+
+---
+
+## 制約と注意点
+
+- ブロック／検知の判定は `RawEventData` に対するヒューリスティックです。実レコードで
+  `PolicyDetails[].Rules[].Actions` / `EndpointMetaData.EnforcementMode` を確認し調整してください。
+- 秘密度ラベルはテナント固有の GUID（`SensitivityLabelId`）で識別されます。
+  ラベル名との対応は Purview のラベル定義を参照してください。
+- `CloudAppEvents` の DLP 監査レコードは、M365 と Defender for Cloud Apps の接続、および
+  DLP ポリシーの稼働が前提です（前提条件セクション参照）。
+- テナントの Advanced Hunting には処理リソースのレート制限があります。スケジュール実行の
+  集計は 14 日窓・上位 N 件に制限しています。
+
+## 参考ドキュメント
+
+- [Investigate DLP alerts with Microsoft Sentinel](https://learn.microsoft.com/ja-jp/defender-xdr/dlp-investigate-alerts-sentinel)
+- [Investigate DLP alerts with Microsoft Defender XDR](https://learn.microsoft.com/defender-xdr/dlp-investigate-alerts-defender)
+- [CloudAppEvents — advanced hunting schema](https://learn.microsoft.com/defender-xdr/advanced-hunting-cloudappevents-table)
+- [Connect Microsoft 365 to Microsoft Defender for Cloud Apps](https://learn.microsoft.com/defender-cloud-apps/protect-office-365)
+- [Labeling activities available in Activity explorer](https://learn.microsoft.com/purview/data-classification-activity-explorer-available-events)

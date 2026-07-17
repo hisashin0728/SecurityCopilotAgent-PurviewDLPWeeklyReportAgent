@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Security Copilot Plugin Card — Purview DLP Weekly Report</title>
+  <style>
+    :root {
+      --primary: #0078D4; --primary-dark: #005A9E; --bg: #F5F5F5; --card-bg: #FFFFFF;
+      --text: #323130; --text-secondary: #605E5C; --border: #E1DFDD;
+      --badge-kql: #0E7A0D; --badge-agent: #107C10; --badge-logicapp: #0072C6; --badge-none: #605E5C;
+      --radius: 8px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI','Yu Gothic UI','Meiryo',system-ui,sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 32px; }
+    .container { max-width: 960px; margin: 0 auto; }
+    .plugin-header { background: linear-gradient(135deg,var(--primary) 0%,var(--primary-dark) 100%); color: #fff; padding: 32px 40px; border-radius: var(--radius) var(--radius) 0 0; position: relative; overflow: hidden; }
+    .plugin-header::after { content: ''; position: absolute; top: -40px; right: -40px; width: 200px; height: 200px; background: rgba(255,255,255,0.05); border-radius: 50%; }
+    .plugin-header .type-label { display: inline-block; background: rgba(255,255,255,0.2); padding: 4px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    .plugin-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .plugin-header .internal-name { font-size: 13px; opacity: 0.75; font-family: 'Cascadia Code','Fira Code',monospace; margin-bottom: 12px; }
+    .plugin-header .description { font-size: 15px; opacity: 0.9; max-width: 720px; }
+    .meta-bar { background: var(--card-bg); border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 16px 40px; display: flex; gap: 32px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--border); }
+    .meta-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+    .meta-item strong { color: var(--text); font-weight: 600; }
+    .auth-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; color: #fff; }
+    .auth-none { background: var(--badge-none); }
+    .content { background: var(--card-bg); border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); padding: 32px 40px; }
+    .section-title { font-size: 18px; font-weight: 700; color: var(--primary); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 2px solid var(--primary); }
+    .notice { background: #FFF4CE; border: 1px solid #F2D57E; border-radius: var(--radius); padding: 14px 18px; font-size: 13px; color: #6B5900; margin-bottom: 24px; }
+    .notice strong { color: #4A3E00; }
+    .settings-table, .inputs-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    .settings-table th, .inputs-table th { text-align: left; padding: 6px 10px; background: var(--bg); border-bottom: 2px solid var(--border); color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .settings-table td, .inputs-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .setting-name, .param-name { font-family: 'Cascadia Code','Fira Code',monospace; font-weight: 600; color: var(--primary-dark); white-space: nowrap; }
+    .req-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: #FDE7E9; color: #A4262C; }
+    .skill-group { margin: 20px 0 28px; }
+    .skill-group-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .format-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
+    .format-kql { background: var(--badge-kql); }
+    .format-agent { background: var(--badge-agent); }
+    .format-logicapp { background: var(--badge-logicapp); }
+    .group-info { font-size: 13px; color: var(--text-secondary); }
+    .skill-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 10px; }
+    .skill-card .skill-name { font-size: 15px; font-weight: 600; }
+    .skill-card .skill-internal { font-size: 12px; color: var(--text-secondary); font-family: 'Cascadia Code','Fira Code',monospace; margin-bottom: 6px; }
+    .skill-card .skill-desc { font-size: 13px; color: var(--text-secondary); }
+    code { background: #EEE; padding: 1px 5px; border-radius: 3px; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 12px; }
+    .child-skills-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .child-skill-tag { background: #E8F0FE; color: var(--primary-dark); padding: 4px 12px; border-radius: 16px; font-size: 13px; font-weight: 500; font-family: 'Cascadia Code','Fira Code',monospace; border: 1px solid #C7DDFB; }
+    .report-items { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; margin-top: 8px; }
+    .report-item { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; }
+    .report-item span { color: var(--primary-dark); font-weight: 700; margin-right: 6px; }
+    .card-footer { text-align: center; padding: 20px; font-size: 12px; color: var(--text-secondary); }
+    @media (max-width: 680px) { body { padding: 12px; } .plugin-header,.meta-bar,.content { padding-left: 20px; padding-right: 20px; } .report-items { grid-template-columns: 1fr; } .meta-bar { flex-direction: column; gap: 12px; align-items: flex-start; } }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="plugin-header">
+    <div class="type-label">Scheduled Agent</div>
+    <h1>Purview DLP Weekly Report</h1>
+    <div class="internal-name">PurviewDlpWeeklyReport</div>
+    <div class="description">
+      Microsoft Purview の DLP アクティビティを Defender の <code>CloudAppEvents</code> から週次集計し、
+      適用された秘密度ラベルと利用クラウドサービスを判別。視認性の高い HTML/CSS レポートを
+      Azure Logic App 経由でメール配信します。
+    </div>
+  </div>
+
+  <div class="meta-bar">
+    <div class="meta-item"><span>🔧</span><span>Skills: <strong>5</strong></span></div>
+    <div class="meta-item"><span>📦</span><span>Skill Groups: <strong>3</strong></span></div>
+    <div class="meta-item"><span>📐</span><span>Formats: <strong>Agent, KQL, LogicApp</strong></span></div>
+    <div class="meta-item"><span>🗄️</span><span>Data Source: <strong>Defender CloudAppEvents</strong></span></div>
+    <div class="meta-item"><span>⏰</span><span>Trigger: <strong>Weekly (604800s)</strong></span></div>
+    <div class="meta-item"><span>🔒</span><span>Auth: </span><span class="auth-badge auth-none">None</span></div>
+  </div>
+
+  <div class="content">
+
+    <div class="notice">
+      <strong>⚠️ 前提条件:</strong> <code>CloudAppEvents</code> に Purview DLP 監査レコード
+      （<code>RawEventData.Operation = DLPRuleMatch / DLPRuleUndo</code>）が投入されるには、
+      <strong>Microsoft 365 と Defender for Cloud Apps の接続</strong>と <strong>DLP ポリシーの稼働</strong>が必要です。
+      DLP レコードが無い場合、レポートに注意バナーと「データなし」を明記します（架空データは生成しません）。
+    </div>
+
+    <div class="section-title"><span>⚙️</span> Plugin Settings（Logic App）</div>
+    <table class="settings-table">
+      <thead><tr><th>設定名</th><th>説明</th><th>必須</th></tr></thead>
+      <tbody>
+        <tr><td class="setting-name">LogicAppSubscriptionId</td><td>メール送信 Logic App のサブスクリプション ID</td><td><span class="req-badge">必須</span></td></tr>
+        <tr><td class="setting-name">LogicAppResourceGroup</td><td>Logic App のリソースグループ名</td><td><span class="req-badge">必須</span></td></tr>
+        <tr><td class="setting-name">LogicAppWorkflowName</td><td>Logic App ワークフロー名</td><td><span class="req-badge">必須</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-title" style="margin-top:28px;"><span>🤖</span> Agent</div>
+    <div class="skill-card">
+      <div class="skill-name">Orchestrate Purview DLP Weekly Report</div>
+      <div class="skill-internal">OrchestratePurviewDlpWeeklyReport</div>
+      <div class="skill-desc">
+        過去 14 日間の DLP アクティビティを <code>CloudAppEvents</code> から集計し、自己完結型 HTML レポートを生成して
+        Logic App 経由でメール送信します（モデル: gpt-4o、Interface: Agent）。
+      </div>
+      <div class="child-skills-list">
+        <span class="child-skill-tag">GetDlpDetectionSummary</span>
+        <span class="child-skill-tag">GetDlpBySensitiveInfoType</span>
+        <span class="child-skill-tag">GetDlpByEgressChannel</span>
+        <span class="child-skill-tag">GetDlpByUserAndLabel</span>
+        <span class="child-skill-tag">SendDlpReportEmail</span>
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-top:28px;"><span>📄</span> レポート項目</div>
+    <div class="report-items">
+      <div class="report-item"><span>1.</span>対象期間</div>
+      <div class="report-item"><span>2.</span>エグゼクティブサマリー（前週比較）</div>
+      <div class="report-item"><span>3-1.</span>ラベル毎の集計</div>
+      <div class="report-item"><span>3-2.</span>機密情報の種類（SIT）毎の集計</div>
+      <div class="report-item"><span>3-3.</span>持ち出し経路分析</div>
+      <div class="report-item"><span>3-4.</span>ユーザー分析（Top 10）</div>
+    </div>
+
+    <div class="section-title" style="margin-top:28px;"><span>⚡</span> Skills</div>
+
+    <div class="skill-group">
+      <div class="skill-group-header"><span class="format-badge format-kql">KQL</span><span class="group-info">4 skills — Defender / CloudAppEvents</span></div>
+      <div class="skill-card"><div class="skill-name">Get DLP Detection Summary</div><div class="skill-internal">GetDlpDetectionSummary</div><div class="skill-desc">週（今週/前週）× 判定（ブロック/検知）× ワークロード × ラベル別の DLP アラート数。<code>RawEventData.Operation in (DLPRuleMatch, DLPRuleUndo)</code></div></div>
+      <div class="skill-card"><div class="skill-name">Get DLP Detections by Sensitive Information Type</div><div class="skill-internal">GetDlpBySensitiveInfoType</div><div class="skill-desc">機密情報の種類（SIT）別の検知数。<code>PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[]</code> を mv-expand。</div></div>
+      <div class="skill-card"><div class="skill-name">Get DLP Detections by Egress Channel</div><div class="skill-internal">GetDlpByEgressChannel</div><div class="skill-desc">持ち出し経路（SharePoint/OneDrive/Teams/Exchange/USB/印刷）別の検知数・判定・ラベル。</div></div>
+      <div class="skill-card"><div class="skill-name">Get DLP Detections by User and Label (Top 10)</div><div class="skill-internal">GetDlpByUserAndLabel</div><div class="skill-desc">ユーザー × 適用ラベル別の DLP アラート数（ブロック/検知）。検知数降順 Top 10。</div></div>
+    </div>
+
+    <div class="skill-group">
+      <div class="skill-group-header"><span class="format-badge format-logicapp">LogicApp</span><span class="group-info">1 skill — Email delivery</span></div>
+      <div class="skill-card">
+        <div class="skill-name">Send Purview DLP Weekly Report Email</div>
+        <div class="skill-internal">SendDlpReportEmail</div>
+        <div class="skill-desc">生成した HTML レポートを Office 365 コネクタ経由でメール送信します（TriggerName: manual）。</div>
+        <table class="inputs-table">
+          <thead><tr><th>パラメータ</th><th>説明</th><th>必須</th></tr></thead>
+          <tbody><tr><td class="param-name">ReportHtml</td><td>送信する DLP 週次レポートの HTML 全文</td><td>Yes</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-footer">
+    Security Copilot Custom Agent &nbsp;·&nbsp; PurviewDlpWeeklyReport &nbsp;·&nbsp; Target: Defender CloudAppEvents &nbsp;·&nbsp; Delivery: Azure Logic App
+  </div>
+</div>
+</body>
+</html>
