@@ -93,9 +93,11 @@ SkillGroups:
 
             # 対象データと判別条件（CloudAppEvents）
             - DLP アラートイベント: `RawEventData.Operation` が `DLPRuleMatch` / `DLPRuleUndo` のレコード
-            - 適用された秘密度ラベル: ワークロード別メタデータ
-              （SharePoint/OneDrive は `RawEventData.SharePointMetaData.SensitivityLabelNames` /
-              `.SensitivityLabelIds`。`RawEventData.SensitivityLabelId` は DLP レコードでは空のことが多い）
+            - 適用された秘密度ラベル: 複数のフィールドから抽出します
+              （`RawEventData.SensitivityLabelEventData.SensitivityLabelId` / `RawEventData.LabelId` /
+              `RawEventData.SensitivityLabelId` / `RawEventData.SharePointMetaData.SensitivityLabelIds`）。
+              ラベルは GUID のため、各スキル内の LabelMap 変換テーブルで名称に変換します
+              （データにラベル名が含まれる場合はそちらを優先）。ラベルがない場合は「ラベルなし/不明」とします。
             - 機密情報の種類（SIT）: `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName`
               （例: Credit Card Number）
             - 持ち出し経路: `RawEventData.Workload` / `Application`
@@ -222,18 +224,34 @@ SkillGroups:
           Target: Defender
           Template: |-
             let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            let LabelMap = datatable(LabelGuid:string, LabelName:string)
+            [
+              "defa4170-0d19-0005-0000-bc88714345d2","Personal",
+              "defa4170-0d19-0005-0001-bc88714345d2","Public",
+              "defa4170-0d19-0005-0002-bc88714345d2","General",
+              "defa4170-0d19-0005-0003-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0004-bc88714345d2","All Employees (unrestricted)",
+              "defa4170-0d19-0005-0005-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0006-bc88714345d2","Anyone (unrestricted)",
+              "defa4170-0d19-0005-0007-bc88714345d2","All Employees",
+              "defa4170-0d19-0005-0008-bc88714345d2","Trusted People",
+              "defa4170-0d19-0005-0009-bc88714345d2","Highly Confidential",
+              "6a6067cf-b972-45c0-a5ee-1ac16535698b","Finance"
+            ];
             CloudAppEvents
             | where Timestamp > ago(14d)
             | extend Operation = tostring(RawEventData.Operation)
             | where Operation in (dlpOps)
             | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
             | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
-            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
-            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
-            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
-                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
-                                  isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
-                                  "ラベルなし/不明")
+            | extend LabelGUID1 = tostring(parse_json(tostring(RawEventData.SensitivityLabelEventData)).SensitivityLabelId)
+            | extend LabelGUID2 = iff(isempty(tostring(RawEventData.LabelId)), LabelGUID1, tostring(RawEventData.LabelId))
+            | extend LabelGUID3 = iff(isempty(tostring(RawEventData.SensitivityLabelId)), LabelGUID2, tostring(RawEventData.SensitivityLabelId))
+            | extend SPArrIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend SPArrNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend LabelGUID = coalesce(iff(isempty(LabelGUID3), "", LabelGUID3), iff(SPArrIds != "[]" and isnotempty(SPArrIds), tostring(parse_json(SPArrIds)[0]), ""))
+            | lookup kind=leftouter LabelMap on $left.LabelGUID == $right.LabelGuid
+            | extend Label = coalesce(iff(SPArrNames != "[]" and isnotempty(SPArrNames), tostring(parse_json(SPArrNames)[0]), ""), LabelName, iff(isnotempty(LabelGUID), LabelGUID, ""), "ラベルなし/不明")
             | extend RawStr = tostring(RawEventData)
             | extend Verdict = iff(RawStr has "BlockAccess"
                                    or RawStr has "\"Mode\":\"Block\""
@@ -281,6 +299,20 @@ SkillGroups:
           Target: Defender
           Template: |-
             let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            let LabelMap = datatable(LabelGuid:string, LabelName:string)
+            [
+              "defa4170-0d19-0005-0000-bc88714345d2","Personal",
+              "defa4170-0d19-0005-0001-bc88714345d2","Public",
+              "defa4170-0d19-0005-0002-bc88714345d2","General",
+              "defa4170-0d19-0005-0003-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0004-bc88714345d2","All Employees (unrestricted)",
+              "defa4170-0d19-0005-0005-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0006-bc88714345d2","Anyone (unrestricted)",
+              "defa4170-0d19-0005-0007-bc88714345d2","All Employees",
+              "defa4170-0d19-0005-0008-bc88714345d2","Trusted People",
+              "defa4170-0d19-0005-0009-bc88714345d2","Highly Confidential",
+              "6a6067cf-b972-45c0-a5ee-1ac16535698b","Finance"
+            ];
             CloudAppEvents
             | where Timestamp > ago(14d)
             | where tostring(RawEventData.Operation) in (dlpOps)
@@ -296,11 +328,14 @@ SkillGroups:
                 Workload has "Endpoint" and RawStr has "Print", "印刷",
                 Workload has "Endpoint", "エンドポイント (その他)",
                 Workload)
-            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
-            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
-            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
-                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
-                                  "ラベルなし/不明")
+            | extend LabelGUID1 = tostring(parse_json(tostring(RawEventData.SensitivityLabelEventData)).SensitivityLabelId)
+            | extend LabelGUID2 = iff(isempty(tostring(RawEventData.LabelId)), LabelGUID1, tostring(RawEventData.LabelId))
+            | extend LabelGUID3 = iff(isempty(tostring(RawEventData.SensitivityLabelId)), LabelGUID2, tostring(RawEventData.SensitivityLabelId))
+            | extend SPArrIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend SPArrNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend LabelGUID = coalesce(iff(isempty(LabelGUID3), "", LabelGUID3), iff(SPArrIds != "[]" and isnotempty(SPArrIds), tostring(parse_json(SPArrIds)[0]), ""))
+            | lookup kind=leftouter LabelMap on $left.LabelGUID == $right.LabelGuid
+            | extend Label = coalesce(iff(SPArrNames != "[]" and isnotempty(SPArrNames), tostring(parse_json(SPArrNames)[0]), ""), LabelName, iff(isnotempty(LabelGUID), LabelGUID, ""), "ラベルなし/不明")
             | extend Verdict = iff(RawStr has "BlockAccess"
                                    or RawStr has "\"Mode\":\"Block\""
                                    or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")
@@ -326,6 +361,20 @@ SkillGroups:
           Target: Defender
           Template: |-
             let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            let LabelMap = datatable(LabelGuid:string, LabelName:string)
+            [
+              "defa4170-0d19-0005-0000-bc88714345d2","Personal",
+              "defa4170-0d19-0005-0001-bc88714345d2","Public",
+              "defa4170-0d19-0005-0002-bc88714345d2","General",
+              "defa4170-0d19-0005-0003-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0004-bc88714345d2","All Employees (unrestricted)",
+              "defa4170-0d19-0005-0005-bc88714345d2","Confidential",
+              "defa4170-0d19-0005-0006-bc88714345d2","Anyone (unrestricted)",
+              "defa4170-0d19-0005-0007-bc88714345d2","All Employees",
+              "defa4170-0d19-0005-0008-bc88714345d2","Trusted People",
+              "defa4170-0d19-0005-0009-bc88714345d2","Highly Confidential",
+              "6a6067cf-b972-45c0-a5ee-1ac16535698b","Finance"
+            ];
             CloudAppEvents
             | where Timestamp > ago(14d)
             | where tostring(RawEventData.Operation) in (dlpOps)
@@ -338,12 +387,14 @@ SkillGroups:
                 isnotempty(ActorRaw), strcat(ActorRaw, " (システム)"),
                 "不明")
             | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
-            | extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
-            | extend SPLabelIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
-            | extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
-                                  isnotempty(SPLabelIds) and SPLabelIds != "[]", SPLabelIds,
-                                  isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
-                                  "ラベルなし/不明")
+            | extend LabelGUID1 = tostring(parse_json(tostring(RawEventData.SensitivityLabelEventData)).SensitivityLabelId)
+            | extend LabelGUID2 = iff(isempty(tostring(RawEventData.LabelId)), LabelGUID1, tostring(RawEventData.LabelId))
+            | extend LabelGUID3 = iff(isempty(tostring(RawEventData.SensitivityLabelId)), LabelGUID2, tostring(RawEventData.SensitivityLabelId))
+            | extend SPArrIds = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+            | extend SPArrNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+            | extend LabelGUID = coalesce(iff(isempty(LabelGUID3), "", LabelGUID3), iff(SPArrIds != "[]" and isnotempty(SPArrIds), tostring(parse_json(SPArrIds)[0]), ""))
+            | lookup kind=leftouter LabelMap on $left.LabelGUID == $right.LabelGuid
+            | extend Label = coalesce(iff(SPArrNames != "[]" and isnotempty(SPArrNames), tostring(parse_json(SPArrNames)[0]), ""), LabelName, iff(isnotempty(LabelGUID), LabelGUID, ""), "ラベルなし/不明")
             | extend Verdict = iff(RawStr has "BlockAccess"
                                    or RawStr has "\"Mode\":\"Block\""
                                    or RawStr has "\"EnforcementMode\":\"Block\"", "ブロック", "検知")

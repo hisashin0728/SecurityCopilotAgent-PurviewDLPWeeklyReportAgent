@@ -39,7 +39,7 @@ DLP や秘密度ラベルの詳細は、`RawEventData`（元の監査イベン�
 | --- | --- |
 | `Timestamp` | 対象期間フィルタ（週次） |
 | `RawEventData.Operation` | **DLP アラートの識別**（`DLPRuleMatch` / `DLPRuleUndo`） |
-| `RawEventData.SharePointMetaData.SensitivityLabelNames` / `.SensitivityLabelIds` | **適用された秘密度ラベル**（配列。DLP レコードでは `RawEventData.SensitivityLabelId` は空のためこちらを使用） |
+| `RawEventData.SensitivityLabelEventData.SensitivityLabelId` / `RawEventData.LabelId` / `RawEventData.SensitivityLabelId` / `RawEventData.SharePointMetaData.SensitivityLabelIds` | **適用された秘密度ラベル（GUID）**。複数フィールドを優先順で抽出し、`LabelMap` で名称に変換 |
 | `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName` | **検出された機密情報の種類（SIT）**（例: Credit Card Number） |
 | `RawEventData.PolicyDetails[].Rules[].Actions` | **ブロック / 検知の判定**（`BlockAccess`=ブロック、`GenerateAlert`=検知） |
 | `RawEventData.Workload` / `Application` | **ワークロード／利用クラウドサービス**（持ち出し経路分析） |
@@ -81,22 +81,45 @@ DLP ルール一致レコードのアクションに基づいて判定します�
 
 ### DLP イベントの識別とラベル抽出
 
-DLP 検知イベントは `RawEventData.Operation` で識別し、ラベルはワークロード別メタデータから抽出します
-（DLP レコードでは `RawEventData.SensitivityLabelId` が空のため）。
+DLP 検知イベントは `RawEventData.Operation` で識別します。秘密度ラベルの GUID はレコードによって
+格納場所が異なるため、[ナレッジ記事](https://thewindowsupdate.com/2023/05/23/advanced-hunting-for-microsoft-purview-data-loss-prevention-dlp-incidents/)
+の手法に従い、**複数フィールドを優先順で抽出**します（従来は `SharePointMetaData` のみを参照しており、
+他フィールドのラベルを取りこぼしていました）。
 
 ```kusto
-let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
-CloudAppEvents
-| where Timestamp > ago(14d)
-| extend Operation = tostring(RawEventData.Operation)
-| where Operation in (dlpOps)
-| extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
-| extend SPLabelNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
-| extend SPLabelIds  = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
-| extend Label = case(isnotempty(SPLabelNames) and SPLabelNames != "[]", SPLabelNames,
-                      isnotempty(SPLabelIds)  and SPLabelIds  != "[]", SPLabelIds,
-                      isnotempty(tostring(RawEventData.SensitivityLabelId)), tostring(RawEventData.SensitivityLabelId),
-                      "ラベルなし/不明")
+| extend LabelGUID1 = tostring(parse_json(tostring(RawEventData.SensitivityLabelEventData)).SensitivityLabelId)
+| extend LabelGUID2 = iff(isempty(tostring(RawEventData.LabelId)), LabelGUID1, tostring(RawEventData.LabelId))
+| extend LabelGUID3 = iff(isempty(tostring(RawEventData.SensitivityLabelId)), LabelGUID2, tostring(RawEventData.SensitivityLabelId))
+| extend SPArrIds  = tostring(RawEventData.SharePointMetaData.SensitivityLabelIds)
+| extend SPArrNames = tostring(RawEventData.SharePointMetaData.SensitivityLabelNames)
+| extend LabelGUID = coalesce(iff(isempty(LabelGUID3), "", LabelGUID3),
+                              iff(SPArrIds != "[]" and isnotempty(SPArrIds), tostring(parse_json(SPArrIds)[0]), ""))
+| lookup kind=leftouter LabelMap on $left.LabelGUID == $right.LabelGuid
+| extend Label = coalesce(iff(SPArrNames != "[]" and isnotempty(SPArrNames), tostring(parse_json(SPArrNames)[0]), ""),
+                          LabelName, iff(isnotempty(LabelGUID), LabelGUID, ""), "ラベルなし/不明")
+```
+
+#### GUID → ラベル名の変換テーブル（LabelMap）
+
+`RawEventData` のラベルは **GUID** で格納されます。各 KQL スキルは `LabelMap` という `datatable` で
+既定ラベルの GUID を名称に変換します。**テナント固有のカスタムラベル**は、以下の PowerShell で
+取得した GUID/名称を `LabelMap` に追記してください（Security & Compliance PowerShell）:
+
+```powershell
+Connect-IPPSSession
+Get-Label | Select-Object ImmutableId, DisplayName
+```
+
+```kusto
+let LabelMap = datatable(LabelGuid:string, LabelName:string)
+[
+  "defa4170-0d19-0005-0000-bc88714345d2","Personal",
+  "defa4170-0d19-0005-0002-bc88714345d2","General",
+  "defa4170-0d19-0005-0004-bc88714345d2","All Employees (unrestricted)",
+  "defa4170-0d19-0005-0005-bc88714345d2","Confidential",
+  "defa4170-0d19-0005-0009-bc88714345d2","Highly Confidential"
+  // ... カスタムラベルの GUID/名称を追記
+];
 ```
 
 ### 機密情報の種類（SIT）の抽出
