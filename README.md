@@ -44,7 +44,7 @@ DLP や秘密度ラベルの詳細は、`RawEventData`（元の監査イベン�
 | `RawEventData.PolicyDetails[].Rules[].Actions` | **ブロック / 検知の判定**（`BlockAccess`=ブロック、`GenerateAlert`=検知） |
 | `RawEventData.Workload` / `Application` | **ワークロード／利用クラウドサービス**（持ち出し経路分析） |
 | `AccountDisplayName` / `RawEventData.UserId` / `AccountId` | **ユーザー（実操作者）別集計**。システム/アプリプリンシパル（`APP@SHAREPOINT` 等）の場合はアラート通知先で補完 |
-| `RawEventData.PolicyDetails[].Rules[].ActionParameters`（`GenerateAlert:<UPN>`） | **DLP ポリシーのアラート通知先/管理者**（例: `admin@azurecsa.net`。トリガーした実ユーザーではない） |
+| `RawEventData.PolicyDetails[].Rules[].ActionParameters`（`GenerateAlert:<UPN>`） | **DLP ポリシーのアラート通知先/管理者**（例: `admin@contoso.com`。トリガーした実ユーザーではない） |
 | `RawEventData.EvaluationSource` | DLP 評価の契機（例: `DlpPolicyEventBasedAssistantSharePoint` = SharePoint コンテンツスキャン） |
 | `RawEventData.PolicyDetails[].PolicyName` / `.Rules[].RuleName` / `.Rules[].Severity` | DLP ポリシー名・ルール名・重大度 |
 
@@ -128,29 +128,17 @@ SIT は `RawEventData.PolicyDetails[]` を `mv-expand` で展開して抽出し�
 
 ---
 
-## ⚠️ 前提条件と検証結果（本テナントでのライブ確認）
+## ⚠️ 前提条件とデータ構造
 
-指定環境（Entra ID テナント `76684a67-d816-43ce-93f9-29b6f72f823f`）で `CloudAppEvents` の状況を
-ライブ検証しました。
+`CloudAppEvents` に Purview DLP 監査レコードが投入されるには、**Microsoft 365 を Defender for
+Cloud Apps に接続**し、**DLP ポリシー（Exchange / SharePoint / OneDrive / Teams / Endpoint）が
+稼働**している必要があります。DLP ポリシー違反が発生すると `RawEventData.Operation = DLPRuleMatch`
+のレコードが `CloudAppEvents` に現れます。
 
-| 項目 | 状況 |
-| --- | --- |
-| `CloudAppEvents` テーブル | **データあり**（直近 30 日で約 50 万行、2026-06-16 以降。Defender for Cloud Apps がオンボード済） |
-| **DLP レコード（`DLPRuleMatch`）** | **168 件を確認**（過去 14 日、Workload=`SharePoint`、App=`Microsoft SharePoint Online`） |
-| **機密情報の種類（SIT）** | **`Credit Card Number` を確認**（`PolicyDetails` を mv-expand して抽出） |
-| **ユーザー（実操作者）** | `APP@SHAREPOINT`（`RawEventData.UserId`）。これはアプリ名ではなく **SharePoint のシステム契機の実操作者**です（`EvaluationSource = DlpPolicyEventBasedAssistantSharePoint` = イベントベースのコンテンツスキャンであり、対話的なユーザー操作ではない） |
-| **`azurecsa.net` の UPN** | 全 168 件で `admin@azurecsa.net` のみ。これは `ActionParameters: ["GenerateAlert:admin@azurecsa.net"]` に由来する **DLP ポリシーのアラート通知先/管理者**であり、トリガーしたユーザーではありません |
-| DLP レコードの判定 | すべて `PolicyDetails[].Rules[].Actions = ["GenerateAlert"]`（＝**検知/監査**）。`BlockAccess`（ブロック）は未確認 |
-| DLP レコードの秘密度ラベル | `SharePointMetaData.SensitivityLabelIds/Names` は空配列（検証時のテストファイルにラベル未付与） |
-
-> 全 4 つの KQL スキル（`GetDlpDetectionSummary` / `GetDlpBySensitiveInfoType` /
-> `GetDlpByEgressChannel` / `GetDlpByUserAndLabel`）は、上記実データに対して実行検証済みです
-> （例: SIT=Credit Card Number 168 件、EgressChannel=SharePoint 168 件、ユーザー=APP@SHAREPOINT Top1）。
-
-### 実レコードの構造（検証で判明）
+### 実レコードの構造
 
 DLP イベントの重要情報は `RawEventData` 内の**ワークロード別メタデータ**に格納されます。
-`RawEventData.SensitivityLabelId` は DLP レコードでは空のため、本エージェントは以下を参照します。
+`RawEventData.SensitivityLabelId` は DLP レコードでは空のことが多いため、本エージェントは以下を参照します。
 
 | 情報 | 実際の格納先 |
 | --- | --- |
@@ -160,24 +148,23 @@ DLP イベントの重要情報は `RawEventData` 内の**ワークロード別�
 | ワークロード / クラウドサービス | `RawEventData.Workload` / `Application` |
 | DLP ポリシー・ルール名・重大度 | `RawEventData.PolicyDetails[].PolicyName` / `.Rules[].RuleName` / `.Rules[].Severity` |
 | 検出された機密情報の種類 | `RawEventData.PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[].SensitiveInformationTypeName` |
-
-> 本テナントでは DLP 検知は「SharePoint 上のラベルなしファイルに対する監査（GenerateAlert）」が中心でした。
-> 秘密度ラベル付きファイルへのブロック運用を行うと、`SensitivityLabelNames` が埋まり、
-> `Actions` に `BlockAccess` が現れます。その状態で本エージェントはラベル別・ブロック/検知別に正しく集計します。
+| DLP 評価の契機 | `RawEventData.EvaluationSource`（例: `DlpPolicyEventBasedAssistantSharePoint` = SharePoint コンテンツスキャン） |
 
 ### ユーザー分析のユーザー値について（重要）
 
-本テナントの DLP イベントはすべて **SharePoint のイベントベースコンテンツスキャン**
-（`EvaluationSource = DlpPolicyEventBasedAssistantSharePoint`）による検知で、実操作者は
-`APP@SHAREPOINT`（システム契機）です。対話的なユーザー UPN は存在しません。
-`admin@azurecsa.net` は **DLP ポリシーのアラート通知先（管理者）** であり、トリガーしたユーザーではありません。
+DLP イベントの実操作者は `RawEventData.UserId`（または `AccountDisplayName`）に格納されます。
+ただし **SharePoint のイベントベースコンテンツスキャン**（`EvaluationSource =
+DlpPolicyEventBasedAssistantSharePoint`）による検知は、対話的なユーザー操作ではなく、
+実操作者が `APP@SHAREPOINT` などのシステム/アプリプリンシパルになります。
+このような場合、DLP ポリシーの `GenerateAlert:<UPN>` アクションで指定された **アラート通知先
+（ポリシー管理者）** が唯一のユーザー UPN であり、これは**トリガーしたユーザーではありません**。
 
-`GetDlpByUserAndLabel` はこの実態に合わせて、以下の優先順でユーザーを判定します（実データ検証済み）:
+`GetDlpByUserAndLabel` はこの実態に合わせて、以下の優先順でユーザーを判定します:
 
 1. **実操作者**（`RawEventData.UserId` / `AccountDisplayName`）— エンドポイント/メール DLP など
    対話的な操作では実ユーザー UPN がここに入ります。
 2. 実操作者がシステム/アプリプリンシパル（`APP@` で始まる）の場合 → **アラート通知先**
-   （`GenerateAlert:<UPN>` から抽出した `admin@azurecsa.net` 等を「（ポリシー管理者/通知先）」付きで表示）。
+   （`GenerateAlert:<UPN>` から抽出した UPN を「（ポリシー管理者/通知先）」付きで表示）。
 3. いずれもなければ → 「（システム）」として表示。
 
 ```kusto
