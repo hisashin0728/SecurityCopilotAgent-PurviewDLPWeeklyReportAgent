@@ -9,7 +9,7 @@ Descriptor:
     検出された機密情報の種類（SIT）、および持ち出し経路（SharePoint / OneDrive / Teams / Exchange
     などのクラウドサービス、USB・印刷などのエンドポイント経路）を判別します。対象期間・
     エグゼクティブサマリー（前週比較）・DLP アラート集計（ラベル別／機密情報の種類別／持ち出し経路別／
-    ユーザー分析 Top10）を含む、事実ベースの日本語 HTML レポートを生成します。
+    ユーザー分析 Top10／ファイル分析（種別・パス））を含む、事実ベースの日本語 HTML レポートを生成します。
   Settings:
     - Name: LogicAppSubscriptionId
       Label: Logic App Subscription ID
@@ -36,7 +36,7 @@ AgentDefinitions:
     Description: >-
       Purview の DLP アクティビティを Defender の CloudAppEvents から週次集計し、
       対象期間・エグゼクティブサマリー（前週比較）・DLP アラート集計（秘密度ラベル別／
-      機密情報の種類別／持ち出し経路別／ユーザー分析 Top10）を含む HTML レポートを生成して
+      機密情報の種類別／持ち出し経路別／ユーザー分析 Top10／ファイル分析）を含む HTML レポートを生成して
       Logic App 経由でメール送信します。
     Publisher: Custom
     Product: Security
@@ -118,6 +118,13 @@ SkillGroups:
                USB／印刷など）別の検知数・判定・主な適用ラベルを、週（今週 / 前週）別に取得する。
             4. **GetDlpByUserAndLabel** を呼び出し、ユーザー × 適用ラベル別の DLP アラート数
                （ブロック / 検知）を Top 10 で取得する。→ ユーザー分析に使用する。
+            5. **GetDlpFileStatistics** を呼び出し、DLP アラートの対象ファイルを、
+               ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）× ワークロード × 週別に
+               集計し、主なファイルパス（フォルダ）も取得する。→ ファイル分析に使用する。
+            6. **GetDlpAlertFileEvidence** を呼び出し、Defender の AlertInfo（DLP アラート）と
+               AlertEvidence を結合して、DLP アラートの対象ファイル（EntityType=File）の
+               ファイル名・格納フォルダをファイル種別別に取得する
+               （エンドポイント/クラウド両方の DLP アラートのファイル証拠を含む）。
 
             ## フェーズ 2: インサイトの統合
             収集データから以下を算出・解釈する:
@@ -149,7 +156,7 @@ SkillGroups:
             - 総合リスク判定バナー（改善 / 安定 / 悪化 / 要注意）を色付きで表示
 
             #### 3. DLP アラート 集計
-            以下の 3 つの集計を表示する。**各集計には必ず 2〜3 行の傾向コメントを添える。**
+            以下の集計を表示する。**各集計には必ず 2〜3 行の傾向コメントを添える。**
 
             ##### 3-1. Microsoft Purview ラベル毎の集計
             ラベル | 今週 | 前週 | 増減 | ブロック | 検知 のテーブルと横棒グラフ（CSS）。
@@ -174,6 +181,21 @@ SkillGroups:
             対象の DLP アラートが**対話的なユーザー操作ではなく**、SharePoint のイベントベース
             コンテンツスキャン（システム契機）による検知であることをコメントで補足する。
             実ユーザー UPN はエンドポイント/メール DLP など対話的な操作のイベントで・すべき発生することも追記する。
+
+            ##### 3-5. ファイル分析（種別・ファイル名・ディレクトリ）
+            DLP アラートの対象となったファイルを、GetDlpFileStatistics（CloudAppEvents）および
+            GetDlpAlertFileEvidence（AlertInfo / AlertEvidence）の結果から集計する。
+            - **ファイル種別別サマリ**: ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）|
+              今週 | 前週 | 件数 | 主なワークロード のテーブルと横棒グラフ（CSS）。
+            - **今週の流出ファイル一覧（ファイル名×DLPルール×ディレクトリ、Top 20、必須）**:
+              GetDlpAlertFileEvidence の結果（**今週分のみ**、件数降順 Top 20）を、以下の列で
+              **1 つのテーブル**としてそのまま表示する:
+              ファイル種別（FileType）| ファイル名（FileName）| 対象 DLP アラートルール（DlpRule）|
+              ディレクトリ（Directory）| 件数（Count）。
+              ファイル名・ディレクトリは必ず実値を記載し（ローカルパス C:\Users\... や OneDrive/SharePoint パスを含む）、
+              マスキング・省略しない。Top 20 の行数を超えて拡張しない（トークン量のため）。
+            傾向コメント（2〜3 行）: 最も流出が多いファイル種別・DLP ルール、特定フォルダ
+            への集中、繰り返し出現するファイル名など。データがない場合は「データなし」と明記する。
 
             #### フッター
             - 「本レポートは Security Copilot エージェントにより自動生成されました。」
@@ -218,6 +240,8 @@ SkillGroups:
           - GetDlpBySensitiveInfoType
           - GetDlpByEgressChannel
           - GetDlpByUserAndLabel
+          - GetDlpFileStatistics
+          - GetDlpAlertFileEvidence
           - SendDlpReportEmail
 
   # ─────────────────────────────────────────────────
@@ -417,6 +441,92 @@ SkillGroups:
               by User, Label
             | sort by Detections desc
             | take 10
+
+      # ---- ファイル分析（種別・パス）: CloudAppEvents ----
+      - Name: GetDlpFileStatistics
+        DisplayName: Get DLP File Statistics (Type and Path)
+        Description: >-
+          CloudAppEvents の Purview DLP アラート（DLPRuleMatch / DLPRuleUndo）の対象ファイルを、
+          ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）× ワークロード × 週別に集計し、
+          ファイルパス（フォルダ）とサンプルファイル名も返します。ファイル名・パスは
+          SharePointMetaData.FileName / FilePathUrl、EndpointMetaData、ObjectId から抽出します。
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
+            CloudAppEvents
+            | where Timestamp > ago(14d)
+            | where tostring(RawEventData.Operation) in (dlpOps)
+            | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
+            | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
+            | extend FileName = coalesce(tostring(RawEventData.SharePointMetaData.FileName),
+                                         tostring(parse_json(tostring(RawEventData.EndpointMetaData)).ObjectId),
+                                         tostring(RawEventData.ObjectName),
+                                         tostring(RawEventData.ObjectId))
+            | extend FilePathRaw = coalesce(tostring(RawEventData.SharePointMetaData.FilePathUrl),
+                                            tostring(parse_json(tostring(RawEventData.EndpointMetaData)).TargetFilePath),
+                                            tostring(parse_json(tostring(RawEventData.EndpointMetaData)).FilePath),
+                                            "")
+            | extend FilePathDecoded = iff(isnotempty(FilePathRaw), url_decode(FilePathRaw), "")
+            | extend Folder = iff(isnotempty(FilePathDecoded), tostring(parse_path(FilePathDecoded).DirectoryPath), "")
+            | extend FileName = iff(isnotempty(FileName), url_decode(FileName), FileName)
+            | extend FileExt = tolower(extract(@"\.([A-Za-z0-9]{1,6})$", 1, FileName))
+            | extend FileType = case(
+                FileExt in ("xlsx","xls","xlsm","xlsb","csv"), "Excel/表計算",
+                FileExt in ("docx","doc","docm"), "Word",
+                FileExt == "pdf", "PDF",
+                FileExt in ("pptx","ppt","pptm"), "PowerPoint",
+                FileExt in ("txt","rtf"), "テキスト",
+                FileExt in ("zip","rar","7z"), "圧縮ファイル",
+                FileExt in ("png","jpg","jpeg","gif","bmp","tif","tiff"), "画像",
+                isnotempty(FileExt), strcat("その他 (.", FileExt, ")"),
+                "不明")
+            | extend FileLocation = strcat(FileName, "  ←  ", Folder)
+            | summarize Count = count(),
+                        Files = make_set(FileName, 15),
+                        Folders = make_set(Folder, 15),
+                        FileLocations = make_set(FileLocation, 20)
+              by Week, FileType, Workload
+            | sort by Count desc
+            | take 100
+
+      # ---- DLP アラートのファイル証拠（今週・ルール別 Top20）: Defender AlertInfo / AlertEvidence ----
+      - Name: GetDlpAlertFileEvidence
+        DisplayName: Get DLP Alert File Evidence (This Week, Top 20)
+        Description: >-
+          Defender の AlertInfo（ServiceSource=Microsoft Data Loss Prevention）と AlertEvidence を結合し、
+          **今週（過去 7 日）**の DLP アラートの対象ファイル（EntityType=File）を、
+          ファイル名・DLP アラートルール（AlertInfo.Title から抽出）・ディレクトリ別に集計し、
+          件数降順の Top 20 を返します。ファイル名・パスは url_decode で可読化します。
+          （トークン量削減のため今週分・Top 20 のみ）
+        Settings:
+          Target: Defender
+          Template: |-
+            let dlpAlerts = AlertInfo
+                | where Timestamp > ago(7d)
+                | where ServiceSource == "Microsoft Data Loss Prevention"
+                | extend DlpRule = extract(@"DLP policy \(([^)]+)\)", 1, Title)
+                | project AlertId, DlpRule;
+            AlertEvidence
+            | where Timestamp > ago(7d)
+            | where EntityType == "File" and isnotempty(FileName)
+            | join kind=inner (dlpAlerts) on AlertId
+            | extend FileName = url_decode(FileName)
+            | extend Directory = url_decode(FolderPath)
+            | extend FileExt = tolower(extract(@"\.([A-Za-z0-9]{1,6})$", 1, FileName))
+            | extend FileType = case(
+                FileExt in ("xlsx","xls","xlsm","xlsb","csv"), "Excel/表計算",
+                FileExt in ("docx","doc","docm"), "Word",
+                FileExt == "pdf", "PDF",
+                FileExt in ("pptx","ppt","pptm"), "PowerPoint",
+                FileExt in ("txt","rtf"), "テキスト",
+                FileExt in ("zip","rar","7z"), "圧縮ファイル",
+                isnotempty(FileExt), strcat("その他 (.", FileExt, ")"),
+                "不明")
+            | extend DlpRule = iff(isempty(DlpRule), "不明", DlpRule)
+            | summarize Count = count() by FileType, FileName, DlpRule, Directory
+            | sort by Count desc
+            | take 20
 
   # ─────────────────────────────────────────────────
   # LogicApp Skill — HTML レポートのメール送信

@@ -70,10 +70,10 @@
   </div>
 
   <div class="meta-bar">
-    <div class="meta-item"><span>🔧</span><span>Skills: <strong>5</strong></span></div>
+    <div class="meta-item"><span>🔧</span><span>Skills: <strong>7</strong></span></div>
     <div class="meta-item"><span>📦</span><span>Skill Groups: <strong>3</strong></span></div>
     <div class="meta-item"><span>📐</span><span>Formats: <strong>Agent, KQL, LogicApp</strong></span></div>
-    <div class="meta-item"><span>🗄️</span><span>Data Source: <strong>Defender CloudAppEvents</strong></span></div>
+    <div class="meta-item"><span>🗄️</span><span>Data Source: <strong>Defender CloudAppEvents + AlertInfo/AlertEvidence</strong></span></div>
     <div class="meta-item"><span>⏰</span><span>Trigger: <strong>Weekly (604800s)</strong></span></div>
     <div class="meta-item"><span>🔒</span><span>Auth: </span><span class="auth-badge auth-none">None</span></div>
   </div>
@@ -110,6 +110,8 @@
         <span class="child-skill-tag">GetDlpBySensitiveInfoType</span>
         <span class="child-skill-tag">GetDlpByEgressChannel</span>
         <span class="child-skill-tag">GetDlpByUserAndLabel</span>
+        <span class="child-skill-tag">GetDlpFileStatistics</span>
+        <span class="child-skill-tag">GetDlpAlertFileEvidence</span>
         <span class="child-skill-tag">SendDlpReportEmail</span>
       </div>
     </div>
@@ -122,16 +124,19 @@
       <div class="report-item"><span>3-2.</span>機密情報の種類（SIT）毎の集計</div>
       <div class="report-item"><span>3-3.</span>持ち出し経路分析</div>
       <div class="report-item"><span>3-4.</span>ユーザー分析（Top 10）</div>
+      <div class="report-item"><span>3-5.</span>ファイル分析（種別・パス）</div>
     </div>
 
     <div class="section-title" style="margin-top:28px;"><span>⚡</span> Skills</div>
 
     <div class="skill-group">
-      <div class="skill-group-header"><span class="format-badge format-kql">KQL</span><span class="group-info">4 skills — Defender / CloudAppEvents</span></div>
+      <div class="skill-group-header"><span class="format-badge format-kql">KQL</span><span class="group-info">6 skills — Defender / CloudAppEvents + AlertInfo/AlertEvidence</span></div>
       <div class="skill-card"><div class="skill-name">Get DLP Detection Summary</div><div class="skill-internal">GetDlpDetectionSummary</div><div class="skill-desc">週（今週/前週）× 判定（ブロック/検知）× ワークロード × ラベル別の DLP アラート数。<code>RawEventData.Operation in (DLPRuleMatch, DLPRuleUndo)</code></div></div>
       <div class="skill-card"><div class="skill-name">Get DLP Detections by Sensitive Information Type</div><div class="skill-internal">GetDlpBySensitiveInfoType</div><div class="skill-desc">機密情報の種類（SIT）別の検知数。<code>PolicyDetails[].Rules[].ConditionsMatched.SensitiveInformation[]</code> を mv-expand。</div></div>
       <div class="skill-card"><div class="skill-name">Get DLP Detections by Egress Channel</div><div class="skill-internal">GetDlpByEgressChannel</div><div class="skill-desc">持ち出し経路（SharePoint/OneDrive/Teams/Exchange/USB/印刷）別の検知数・判定・ラベル。</div></div>
       <div class="skill-card"><div class="skill-name">Get DLP Detections by User and Label (Top 10)</div><div class="skill-internal">GetDlpByUserAndLabel</div><div class="skill-desc">ユーザー × 適用ラベル別の DLP アラート数（ブロック/検知）。検知数降順 Top 10。</div></div>
+      <div class="skill-card"><div class="skill-name">Get DLP File Statistics (Type and Path)</div><div class="skill-internal">GetDlpFileStatistics</div><div class="skill-desc">対象ファイルの種別（Excel/Word/PDF 等）× ワークロード × 週別の件数とフォルダパス（CloudAppEvents）。</div></div>
+      <div class="skill-card"><div class="skill-name">Get DLP Alert File Evidence (This Week, Top 20)</div><div class="skill-internal">GetDlpAlertFileEvidence</div><div class="skill-desc">今週の DLP アラートのファイル証拠。<code>AlertInfo</code>(ServiceSource=Microsoft Data Loss Prevention) × <code>AlertEvidence</code>(File) を結合し、ファイル名×DLPルール×ディレクトリ別の件数 Top20。Target: Defender。</div></div>
     </div>
 
     <div class="skill-group">

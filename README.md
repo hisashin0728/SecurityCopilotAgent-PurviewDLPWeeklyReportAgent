@@ -11,6 +11,72 @@ Teams / Exchange / USB / 印刷など）**で操作が行われたか、**どの
 
 ---
 
+## なぜ CloudAppEvents によるログ分析レポートなのか
+
+DLP の状況把握には「アラートを見る」方法と「監査ログ（イベント）を分析する」方法があります。
+本エージェントが後者（`CloudAppEvents` のログ分析）を採用している理由を説明します。
+
+### 1. Purview の DLP アラートだけでは情報が足りない
+
+Purview / Defender の **DLP アラート**（Purview アラートポータル、Defender の `AlertInfo` /
+`AlertEvidence` 等）は「ポリシーに違反した」という**事象の通知**が主目的で、集約・重複排除された
+サマリー情報です。週次の傾向分析に必要な以下の粒度が**取り出しにくい／欠落**します。
+
+- **適用された秘密度ラベル**が何か（Confidential / Highly Confidential 等）
+- **検出された機密情報の種類（SIT）**別の件数（クレジットカード番号、マイナンバー等）
+- **持ち出し経路**（SharePoint / OneDrive / Teams / Exchange / USB / 印刷）ごとの内訳
+- **ユーザー別**の実操作の偏り（誰に集中しているか）
+- **ブロック／検知**の内訳をイベント単位で
+- 前週比などの**時系列の集計・トレンド**
+
+アラートは「気づき」には向きますが、**定量的な週次レポート**の材料としては粒度が粗く、
+ラベル・SIT・経路・ユーザーを軸にした多面的な集計には不向きです。
+
+### 2. Purview DLP イベントを記録する主なテーブルの比較
+
+| データソース | 取得手段 | 収録内容 | 自動集計（KQL） | 可用性 |
+| --- | --- | --- | --- | --- |
+| **`CloudAppEvents`**（本エージェント採用） | Defender Advanced Hunting | M365 統合監査ログ全体（SharePoint/OneDrive/Exchange/Teams/Endpoint）。`RawEventData` に DLP 詳細（ラベル・SIT・アクション・ワークロード・操作者）を内包 | ○ | Defender for Cloud Apps 接続済みなら広く利用可 |
+| `DataSecurityEvents`（Preview） | Defender Advanced Hunting | Purview IRM/DSPM 由来。ラベル・アクション等が**構造化カラム**で提供（`RawEventData` パース不要） | ○（きれい） | **Preview＋IRM→Defender オプトインが必要**。未有効だと `cannot resolve table` |
+| `DataSecurityBehaviors`（Preview） | Defender Advanced Hunting | ユーザーのデータ操作「行動」単位 | ○ | 同上（Preview／オプトイン必要） |
+| `AlertInfo` / `AlertEvidence` | Defender Advanced Hunting | DLP **アラート**の粒度（ポリシー名・重大度・件数） | △（アラート単位のみ） | 広く利用可だが粒度が粗い |
+| Purview アラート／Activity Explorer | Purview ポータル UI | ラベル・DLP アクティビティの閲覧 | ✕（UI 中心・自動化困難） | 利用可だが API/自動化に不向き |
+| 統合監査ログ（UAL）/ Graph API | API | 生の監査イベント | △（別基盤で実装が必要） | 実装コスト高 |
+
+要点:
+- **アラート系**（`AlertInfo` 等）は粒度が粗く、ラベル/SIT/経路/ユーザーの多軸集計に不足。
+- **`DataSecurityEvents`（Preview）**は構造化されていて理想的だが、**IRM→Defender の
+  オプトインが未有効だと利用できない**（`cannot resolve table`）ため前提が重い。
+- **`CloudAppEvents`** は M365 監査ログ全体を 1 テーブルで KQL 集計でき、可用性が高い。
+
+### 3. メリット・デメリット（CloudAppEvents 採用の理由）
+
+**メリット**
+- **1 テーブルで全ワークロード横断**（SharePoint/OneDrive/Exchange/Teams/Endpoint）。経路別分析に最適。
+- **Defender Advanced Hunting で KQL 集計が可能** → Security Copilot エージェントで**自動化・週次レポート化**できる。
+- `RawEventData` に **ラベル・SIT・アクション・ワークロード・操作者**まで含み、多軸の集計に必要な詳細が揃う。
+- **Preview 機能のオプトイン不要**（Defender for Cloud Apps 接続済みなら利用可）で、導入前提が比較的軽い。
+- アラートと違い**イベント単位**なので、ブロック／検知や前週比などの定量集計が可能。
+
+**デメリット（と対処）**
+- **Defender for Cloud Apps への M365 接続が前提**。未接続だとテーブルが空（→ 前提条件を要確認）。
+- 詳細が **`RawEventData` のネスト JSON** に入り、**ワークロードごとに格納形式が異なる**ため
+  パースが複雑（ブロック/検知はヒューリスティック判定が必要）。
+- 秘密度ラベルは **GUID 格納** → `LabelMap` で名称変換が必要（カスタムラベルは追記）。
+- **SharePoint のイベントベーススキャン**は操作者が `APP@SHAREPOINT` 等のシステム
+  プリンシパルになり、実ユーザー特定が難しい（→ アラート通知先で補完）。
+- Advanced Hunting の**保持期間は約30日**（週次レポート用途には十分だが長期保管には別途必要）。
+
+### まとめ
+
+構造化された `DataSecurityEvents`（Preview）が使える環境なら将来的にそちらが有利ですが、
+**オプトイン前提が重く未有効なテナントが多い**ため、本エージェントは**可用性が高く、
+全ワークロードを 1 テーブルで KQL 集計できる `CloudAppEvents`** を採用しています。
+アラートでは得られない**ラベル／SIT／経路／ユーザーの多軸集計**を、自動化された週次 HTML
+レポートとして提供できる点が最大の価値です。
+
+---
+
 ## 情報の取得方法（要件）
 
 - Defender に対して **KQL** を用いて週次の統計を取得する。
@@ -46,6 +112,7 @@ DLP や秘密度ラベルの詳細は、`RawEventData`（元の監査イベン�
 | `AccountDisplayName` / `RawEventData.UserId` / `AccountId` | **ユーザー（実操作者）別集計**。システム/アプリプリンシパル（`APP@SHAREPOINT` 等）の場合はアラート通知先で補完 |
 | `RawEventData.PolicyDetails[].Rules[].ActionParameters`（`GenerateAlert:<UPN>`） | **DLP ポリシーのアラート通知先/管理者**（例: `admin@contoso.com`。トリガーした実ユーザーではない） |
 | `RawEventData.EvaluationSource` | DLP 評価の契機（例: `DlpPolicyEventBasedAssistantSharePoint` = SharePoint コンテンツスキャン） |
+| `RawEventData.SharePointMetaData.FileName` / `.FilePathUrl` / `RawEventData.EndpointMetaData.TargetFilePath` | **対象ファイル名・パス**（ファイル分析。拡張子から種別を判定、`parse_path` でフォルダを抽出） |
 | `RawEventData.PolicyDetails[].PolicyName` / `.Rules[].RuleName` / `.Rules[].Severity` | DLP ポリシー名・ルール名・重大度 |
 
 ### ブロック / 検知の判定
@@ -78,6 +145,8 @@ DLP ルール一致レコードのアクションに基づいて判定します�
 | `GetDlpBySensitiveInfoType` | 機密情報の種類（SIT）別の検知数（今週/前週 × 判定） | 3-2. 機密情報の種類毎 |
 | `GetDlpByEgressChannel` | 持ち出し経路（SharePoint/OneDrive/Teams/Exchange/USB/印刷）別の検知数・判定・ラベル | 3-3. 持ち出し経路分析 |
 | `GetDlpByUserAndLabel` | ユーザー × 適用ラベル別の DLP アラート数（ブロック/検知）、検知数降順 Top 10 | 3-4. ユーザー分析 |
+| `GetDlpFileStatistics` | 対象ファイルの種別（Excel/Word/PDF 等）別の件数と、種別ごとのファイル名・フォルダパス（CloudAppEvents） | 3-5. ファイル分析 |
+| `GetDlpAlertFileEvidence` | DLP アラートのファイル証拠：**今週のみ**、ファイル名×DLPルール×ディレクトリ別の件数 Top 20（**Defender AlertInfo / AlertEvidence**） | 3-5. ファイル分析 |
 
 ### DLP イベントの識別とラベル抽出
 
@@ -149,6 +218,59 @@ SIT は `RawEventData.PolicyDetails[]` を `mv-expand` で展開して抽出し�
     Workload)
 ```
 
+### ファイル分析（種別・パス）
+
+DLP アラートの対象ファイルは、まず **CloudAppEvents**（`GetDlpFileStatistics`）から抽出します。
+ファイル名・パスは `SharePointMetaData.FileName` / `.FilePathUrl`、`EndpointMetaData`、`ObjectId` を
+優先順で参照し、拡張子から種別（Excel / Word / PDF / PowerPoint / テキスト 等）を判定、
+`url_decode` + `parse_path` でフォルダパスを抽出します。
+
+```kusto
+| extend FileName = coalesce(tostring(RawEventData.SharePointMetaData.FileName),
+                             tostring(parse_json(tostring(RawEventData.EndpointMetaData)).ObjectId),
+                             tostring(RawEventData.ObjectName), tostring(RawEventData.ObjectId))
+| extend FilePathRaw = coalesce(tostring(RawEventData.SharePointMetaData.FilePathUrl),
+                                tostring(parse_json(tostring(RawEventData.EndpointMetaData)).TargetFilePath), "")
+| extend Folder = tostring(parse_path(url_decode(FilePathRaw)).DirectoryPath)
+| extend FileExt = tolower(extract(@"\.([A-Za-z0-9]{1,6})$", 1, FileName))
+| extend FileType = case(FileExt in ("xlsx","xls","csv"), "Excel/表計算",
+                         FileExt in ("docx","doc"), "Word", FileExt == "pdf", "PDF",
+                         FileExt in ("pptx","ppt"), "PowerPoint", FileExt in ("txt","rtf"), "テキスト",
+                         isnotempty(FileExt), strcat("その他 (.", FileExt, ")"), "不明")
+```
+
+#### DLP アラートのファイル証拠（Defender AlertInfo / AlertEvidence）
+
+アラートレベルのファイル証拠（エンドポイント/クラウド両方の DLP アラート）は、Defender の
+**`AlertInfo`**（`ServiceSource == "Microsoft Data Loss Prevention"`）と **`AlertEvidence`** を結合して
+取得します（`GetDlpAlertFileEvidence`、**Target: Defender** で Sentinel 不要）。トークン量を考慮し、
+**今週（過去 7 日）のみ、件数降順 Top 20** に限定します。DLP アラートルール名は
+`AlertInfo.Title`（例:「DLP policy (ルール名) matched for ...」）から `extract` で抽出し、
+**ファイル名 × DLP ルール × ディレクトリ** で集計します。ファイル名・パスは `url_decode` で可読化します。
+
+```kusto
+let dlpAlerts = AlertInfo
+    | where Timestamp > ago(7d)
+    | where ServiceSource == "Microsoft Data Loss Prevention"
+    | extend DlpRule = extract(@"DLP policy \(([^)]+)\)", 1, Title)
+    | project AlertId, DlpRule;
+AlertEvidence
+| where Timestamp > ago(7d)
+| where EntityType == "File" and isnotempty(FileName)
+| join kind=inner (dlpAlerts) on AlertId
+| extend FileName = url_decode(FileName), Directory = url_decode(FolderPath)
+| summarize Count = count() by FileType, FileName, DlpRule, Directory
+| sort by Count desc
+| take 20
+```
+
+> 出力列: `FileType | FileName | DlpRule | Directory | Count`。
+> 出力例（実データで検証済み）: `テキスト | dlp-test-20260730-084007.txt | DLP Test - Credit Card Detection | https://.../DLPSimulation | 1`、
+> ZAVA: `Word | Project Obsidian.docx | <ルール名> | .../personal/u3044_int_zava-corp_com/Documents | N`。
+
+> このスキルは **Target: Defender**（Advanced Hunting）のみで動作し、Sentinel ワークスペース設定は不要です。
+> エンドポイント DLP（ローカルパス）・クラウド DLP（SharePoint/OneDrive パス）の両方のファイル証拠を含みます。
+
 ---
 
 ## ⚠️ 前提条件とデータ構造
@@ -157,6 +279,37 @@ SIT は `RawEventData.PolicyDetails[]` を `mv-expand` で展開して抽出し�
 Cloud Apps に接続**し、**DLP ポリシー（Exchange / SharePoint / OneDrive / Teams / Endpoint）が
 稼働**している必要があります。DLP ポリシー違反が発生すると `RawEventData.Operation = DLPRuleMatch`
 のレコードが `CloudAppEvents` に現れます。
+
+### 【必須】AlertInfo / AlertEvidence に DLP アラートを出力する設定
+
+本エージェントのファイル分析（3-5）は **Defender の `AlertInfo` / `AlertEvidence`** に
+**`ServiceSource = "Microsoft Data Loss Prevention"`** のアラートが出力されていることが前提です。
+DLP アラートが Defender XDR（＝ Advanced Hunting の `AlertInfo` / `AlertEvidence`）に流れるには、
+以下の設定が必要です。
+
+| # | 設定項目 | 内容 |
+| --- | --- | --- |
+| 1 | **ライセンス** | Microsoft Purview DLP + Microsoft Defender XDR（Advanced Hunting）。フルのアラート機能は **Microsoft 365 E5 / E5 Compliance** を推奨（E3 はアラート集計の挙動が異なる） |
+| 2 | **DLP ポリシーの作成・有効化** | Microsoft Purview ポータル（[purview.microsoft.com](https://purview.microsoft.com)）で対象ワークロード（Exchange / SharePoint / OneDrive / Teams / **デバイス＝エンドポイント DLP**）の DLP ポリシーを作成し、**有効（オン）** にする |
+| 3 | **ルールでアラートを有効化（最重要）** | 各 DLP ポリシーの **ルール編集 → 「インシデントレポート（Incident reports）」** で **「ルールが一致したときにアラートを生成する」** をオンにする。アラート重大度（低/中/高）も設定する。**この設定が無いとアラートは生成されず、`AlertInfo` に出力されません** |
+| 4 | **Defender XDR への統合（既定でオン）** | DLP アラートは Microsoft Defender ポータルの統合インシデントキューに **自動連携** されます（IRM のような個別オプトインは不要）。Defender ポータル > **インシデントとアラート** で **サービス/検出ソース = Microsoft Data Loss Prevention** のフィルタで確認できます |
+| 5 | **エンドポイント DLP（デバイス）** | ローカルファイルのファイル名・パスを取得するには、対象デバイスを **Microsoft Purview（エンドポイント DLP）にオンボード**し、デバイス向け DLP ポリシー（USB / 印刷 / クラウドアップロード等）でアラートを有効化する |
+| 6 | **反映確認** | 設定後、DLP ポリシー違反を発生させ、Advanced Hunting で次を実行してレコードを確認する:<br>`AlertInfo \| where ServiceSource == "Microsoft Data Loss Prevention" \| take 10` |
+
+> **確認クエリ（ファイル証拠の有無）:**
+> ```kusto
+> let dlpAlerts = AlertInfo
+>     | where Timestamp > ago(14d)
+>     | where ServiceSource == "Microsoft Data Loss Prevention"
+>     | distinct AlertId;
+> AlertEvidence
+> | where Timestamp > ago(14d)
+> | where AlertId in (dlpAlerts) and EntityType == "File"
+> | project Timestamp, AlertId, FileName, FolderPath
+> ```
+> `AlertInfo`（`ServiceSource == "Microsoft Data Loss Prevention"`, `Category == "Exfiltration"`）に
+> レコードが無い場合、上記 **手順 3（ルールのアラート生成）** が未設定の可能性が高いです。
+> `GetDlpAlertFileEvidence` スキルはデータが無い場合「データなし」を明記します（架空データは生成しません）。
 
 ### 実レコードの構造
 
@@ -216,6 +369,7 @@ PurviewReport.md で定義された順序で HTML レポートを生成します
    - 3-2. **Microsoft Purview 機密情報の種類（SIT）毎の集計**
    - 3-3. **持ち出し経路分析**（SharePoint / OneDrive / Teams / Exchange / USB / 印刷 など）
    - 3-4. **ユーザー分析**（ユーザー × ラベル、Top 10）
+   - 3-5. **ファイル分析**（ファイル種別 Excel/Word/PDF 等 ― 種別ごとの流出ファイル名・ディレクトリ一覧）
 
 ---
 
@@ -223,7 +377,7 @@ PurviewReport.md で定義された順序で HTML レポートを生成します
 
 - **種別**: スケジュール実行エージェント（`Interfaces: [Agent]`、`WeeklySchedule` トリガー = 604800 秒）
 - **モデル**: `gpt-4o`
-- **子スキル**: 4 つの KQL スキル（CloudAppEvents）＋ 1 つの LogicApp スキル
+- **子スキル**: 6 つの KQL スキル（CloudAppEvents 5 + AlertInfo/AlertEvidence 1、すべて Target: Defender）＋ 1 つの LogicApp スキル
 - **RequiredSkillsets**: `PurviewDlpWeeklyReport`（本マニフェスト自身のインラインスキル）
 - **出力**: 自己完結型 HTML レポート（インライン CSS、外部リソース・JavaScript 不使用）を
   `SendDlpReportEmail`（Logic App）でメール配信
