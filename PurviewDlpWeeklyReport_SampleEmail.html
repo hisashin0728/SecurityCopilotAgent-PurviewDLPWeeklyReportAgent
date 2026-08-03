@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Purview DLP 週次レポート（サンプル）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Meiryo','メイリオ',sans-serif;
+    background: #EAF1FB;
+    color: #16263D;
+    line-height: 1.7;
+    padding: 24px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  .card {
+    background: #FFFFFF;
+    border: 1px solid #C7D9EE;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(15,61,110,0.12);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .header { background: #0F3D6E; color: #FFFFFF; padding: 28px 32px; }
+  .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  .header .sub { font-size: 13px; opacity: 0.92; }
+  .sample-tag {
+    display: inline-block;
+    background: #B00020;
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 12px;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .section { padding: 22px 32px; }
+  .section-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #FFFFFF;
+    background: #0F3D6E;
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+  }
+  .sub-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0F3D6E;
+    border-left: 5px solid #0078D4;
+    padding-left: 10px;
+    margin: 22px 0 10px;
+  }
+  .table-scroll { width: 100%; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+  th {
+    background: #0F3D6E;
+    color: #FFFFFF;
+    text-align: left;
+    padding: 8px 10px;
+    font-weight: 700;
+    border: 1px solid #C7D9EE;
+    white-space: nowrap;
+  }
+  td { padding: 7px 10px; border: 1px solid #C7D9EE; vertical-align: middle; }
+  tbody tr:nth-child(even) { background: #F2F7FD; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .top-row td { font-weight: 700; background: #E3EEFB; }
+  .bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 130px; }
+  .bar-track { flex: 1; background: #E3EEFB; border-radius: 4px; height: 16px; overflow: hidden; min-width: 72px; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-strong { background: #0F3D6E; }
+  .bar-mid { background: #0078D4; }
+  .bar-light { background: #6BB1EA; }
+  .bar-label { font-size: 12px; color: #16263D; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .b { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; color: #FFFFFF; }
+  .b-block { background: #B00020; }
+  .b-detect { background: #0078D4; }
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #FFFFFF;
+    padding: 14px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    margin: 14px 0;
+  }
+  .banner .big { font-size: 20px; }
+  .banner-warn { background: #B00020; }
+  .delta-up { color: #B00020; font-weight: 700; }
+  .delta-down { color: #0F7A0D; font-weight: 700; }
+  .delta-flat { color: #605E5C; font-weight: 700; }
+  .kpi-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 6px; }
+  .kpi {
+    flex: 1;
+    min-width: 150px;
+    background: #F2F7FD;
+    border: 1px solid #C7D9EE;
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .kpi .label { font-size: 12px; color: #0F3D6E; font-weight: 700; }
+  .kpi .value { font-size: 24px; font-weight: 700; color: #16263D; font-variant-numeric: tabular-nums; }
+  .kpi .note { font-size: 12px; }
+  .comment {
+    background: #F2F7FD;
+    border: 1px solid #C7D9EE;
+    border-left: 4px solid #0078D4;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin: 8px 0 4px;
+  }
+  .notice {
+    background: #FFF4CE;
+    border: 1px solid #F2D57E;
+    color: #6B5900;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .legend { font-size: 12px; color: #16263D; margin: 6px 0 12px; }
+  .legend .b { margin-right: 4px; }
+  .path { font-size: 12px; color: #16263D; word-break: break-all; min-width: 220px; }
+  .footer { padding: 18px 32px; font-size: 12px; color: #16263D; background: #F2F7FD; border-top: 1px solid #C7D9EE; }
+  @media (max-width: 640px) {
+    body { padding: 12px; }
+    .header, .section, .footer { padding-left: 18px; padding-right: 18px; }
+    .kpi { min-width: 100%; }
+    table { font-size: 12px; }
+  }
+  @media print {
+    body { background: #FFFFFF; padding: 0; }
+    .card { box-shadow: none; border: 1px solid #999; }
+    .banner, .b, th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="header">
+      <div class="sample-tag">SAMPLE / ダミーデータ</div>
+      <h1>Purview DLP 週次レポート</h1>
+      <div class="sub">
+        対象期間: 2026-07-27（月）〜 2026-08-02（日）&nbsp;·&nbsp;
+        生成日時: 2026-08-03 06:00 JST&nbsp;·&nbsp;
+        データソース: Microsoft Defender CloudAppEvents / AlertInfo / AlertEvidence
+      </div>
+    </div>
+    <div class="section" style="padding-top:18px;padding-bottom:6px;">
+      <div class="notice">
+        <strong>これは PurviewDlpWeeklyReport エージェントが生成する HTML メールのサンプル（ダミーデータ）です。</strong>
+        実際の値・ユーザー名・ファイル名・URL は含まれていません。表示内容は、DLP ポリシーのルール一致、
+        ブロック、検知、対象ファイルの傾向を確認するための例です。
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section">
+      <div class="section-title">1. 対象期間</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>区分</th><th>期間</th><th class="num">総アラート</th><th class="num">ブロック</th><th class="num">検知</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>今週</td><td>2026-07-27 〜 2026-08-02</td><td class="num">184</td><td class="num">67</td><td class="num">117</td></tr>
+          <tr><td>前週</td><td>2026-07-20 〜 2026-07-26</td><td class="num">151</td><td class="num">49</td><td class="num">102</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        生成日時: 2026-08-03 06:00 JST。今週の DLP アラートは 184 件で、前週 151 件から
+        <span class="delta-up">+21.9%（+33 件）</span>増加しました。ブロックは 67 件、監査・検知は 117 件です。
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section">
+      <div class="section-title">2. エグゼクティブサマリー</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="label">総アラート</div><div class="value">184</div><div class="note delta-up">前週比 +21.9%（+33）</div></div>
+        <div class="kpi"><div class="label">ブロック</div><div class="value">67</div><div class="note delta-up">前週比 +36.7%（+18）</div></div>
+        <div class="kpi"><div class="label">検知・監査</div><div class="value">117</div><div class="note delta-up">前週比 +14.7%（+15）</div></div>
+        <div class="kpi"><div class="label">ブロック率</div><div class="value">36.4%</div><div class="note delta-up">前週 32.5% / +3.9 pt</div></div>
+      </div>
+      <div class="banner banner-warn">
+        <span class="big">!</span>
+        <span>総合リスク判定: <strong>要注意</strong> — USB と印刷のブロック増加、および財務情報を含むファイルの検知集中を確認。</span>
+      </div>
+      <div class="comment">
+        総アラートは前週比 +21.9% と増加し、特にブロック件数の伸び（+36.7%）が顕著です。
+        最多ラベルは <strong>Confidential</strong>（72 件）、最多 SIT は <strong>Credit Card Number</strong>（54 件）でした。
+        持ち出し経路では SharePoint が最多ですが、USB は 24 件中 20 件、印刷は 12 件中 9 件がブロックされています。
+        エンドポイント経路での試行増加を踏まえ、該当ユーザーと対象ファイルの確認を優先してください。
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section">
+      <div class="section-title">3. DLP アラート 集計</div>
+      <div class="legend">凡例: <span class="b b-block">ブロック</span><span class="b b-detect">検知</span></div>
+
+      <div class="sub-title">3-1. Microsoft Purview ラベル毎の集計</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>ラベル</th><th style="width:24%">今週（比率）</th><th class="num">今週</th><th class="num">前週</th><th class="num">増減</th><th class="num">ブロック</th><th class="num">検知</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:100%"></div></div><span class="bar-label">72</span></div></td><td class="num">72</td><td class="num">61</td><td class="num delta-up">+11</td><td class="num">26</td><td class="num">46</td></tr>
+          <tr class="top-row"><td>Highly Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:60%"></div></div><span class="bar-label">43</span></div></td><td class="num">43</td><td class="num">31</td><td class="num delta-up">+12</td><td class="num">24</td><td class="num">19</td></tr>
+          <tr class="top-row"><td>Finance</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:43%"></div></div><span class="bar-label">31</span></div></td><td class="num">31</td><td class="num">27</td><td class="num delta-up">+4</td><td class="num">12</td><td class="num">19</td></tr>
+          <tr><td>General</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:33%"></div></div><span class="bar-label">24</span></div></td><td class="num">24</td><td class="num">22</td><td class="num delta-up">+2</td><td class="num">3</td><td class="num">21</td></tr>
+          <tr><td>ラベルなし/不明</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:19%"></div></div><span class="bar-label">14</span></div></td><td class="num">14</td><td class="num">10</td><td class="num delta-up">+4</td><td class="num">2</td><td class="num">12</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        <strong>Confidential</strong> が 72 件で最多です。Highly Confidential は前週比 +38.7% と最も大きく増加し、
+        43 件中 24 件（55.8%）がブロックされました。ラベルなし/不明も 14 件あるため、カスタムラベル GUID の
+        LabelMap 登録状況と、未ラベルファイルに対する DLP ポリシー適用を確認してください。
+      </div>
+
+      <div class="sub-title">3-2. Microsoft Purview 機密情報の種類（SIT）毎の集計</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>機密情報の種類</th><th style="width:24%">今週（比率）</th><th class="num">今週</th><th class="num">前週</th><th class="num">増減</th><th class="num">ブロック</th><th class="num">検知</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>Credit Card Number</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:100%"></div></div><span class="bar-label">54</span></div></td><td class="num">54</td><td class="num">41</td><td class="num delta-up">+13</td><td class="num">24</td><td class="num">30</td></tr>
+          <tr class="top-row"><td>Japan My Number</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:72%"></div></div><span class="bar-label">39</span></div></td><td class="num">39</td><td class="num">34</td><td class="num delta-up">+5</td><td class="num">18</td><td class="num">21</td></tr>
+          <tr class="top-row"><td>Japan Bank Account Number</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:57%"></div></div><span class="bar-label">31</span></div></td><td class="num">31</td><td class="num">28</td><td class="num delta-up">+3</td><td class="num">11</td><td class="num">20</td></tr>
+          <tr><td>Japan Passport Number</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:33%"></div></div><span class="bar-label">18</span></div></td><td class="num">18</td><td class="num">12</td><td class="num delta-up">+6</td><td class="num">7</td><td class="num">11</td></tr>
+          <tr><td>SWIFT Code</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:20%"></div></div><span class="bar-label">11</span></div></td><td class="num">11</td><td class="num">0</td><td class="num delta-up">新規</td><td class="num">3</td><td class="num">8</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        <strong>Credit Card Number</strong> が 54 件で最多となり、前週から 13 件増加しました。
+        SWIFT Code は今週新たに 11 件出現し、Finance ラベル付きファイルとの重複が確認されています。
+        1 件のアラートで複数の SIT に一致する場合があるため、SIT 件数の合計は総アラート数と一致しません。
+      </div>
+
+      <div class="sub-title">3-3. 持ち出し経路分析</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>持ち出し経路</th><th style="width:22%">今週（比率）</th><th class="num">今週</th><th class="num">前週</th><th class="num">ブロック</th><th class="num">検知</th><th>主なラベル</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>SharePoint</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:100%"></div></div><span class="bar-label">58</span></div></td><td class="num">58</td><td class="num">51</td><td class="num">13</td><td class="num">45</td><td>Confidential</td></tr>
+          <tr class="top-row"><td>OneDrive</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:72%"></div></div><span class="bar-label">42</span></div></td><td class="num">42</td><td class="num">39</td><td class="num">10</td><td class="num">32</td><td>Confidential</td></tr>
+          <tr class="top-row"><td>Exchange（メール）</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:53%"></div></div><span class="bar-label">31</span></div></td><td class="num">31</td><td class="num">27</td><td class="num">12</td><td class="num">19</td><td>Finance</td></tr>
+          <tr><td>USB/リムーバブルメディア</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:41%"></div></div><span class="bar-label">24</span></div></td><td class="num">24</td><td class="num">15</td><td class="num">20</td><td class="num">4</td><td>Highly Confidential</td></tr>
+          <tr><td>Teams</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:29%"></div></div><span class="bar-label">17</span></div></td><td class="num">17</td><td class="num">14</td><td class="num">3</td><td class="num">14</td><td>General</td></tr>
+          <tr><td>印刷</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:21%"></div></div><span class="bar-label">12</span></div></td><td class="num">12</td><td class="num">5</td><td class="num">9</td><td class="num">3</td><td>Highly Confidential</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        クラウド経路（SharePoint / OneDrive / Exchange / Teams）は 148 件で全体の 80.4%を占めます。
+        一方、USB は前週比 +60.0%、印刷は +140.0% と急増し、両経路の 77.8%（29/36 件）がブロックされました。
+        エンドポイント DLP が制御した操作について、ユーザー・デバイス・業務上の必要性を確認してください。
+      </div>
+
+      <div class="sub-title">3-4. ユーザー分析（Top 10）</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>#</th><th>ユーザー</th><th>適用ラベル</th><th style="width:20%">検知数（比率）</th><th class="num">検知数</th><th class="num">ブロック</th><th class="num">検知</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>1</td><td>yamada@contoso.com</td><td>Highly Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:100%"></div></div><span class="bar-label">21</span></div></td><td class="num">21</td><td class="num">15</td><td class="num">6</td></tr>
+          <tr class="top-row"><td>2</td><td>suzuki@contoso.com</td><td>Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:81%"></div></div><span class="bar-label">17</span></div></td><td class="num">17</td><td class="num">6</td><td class="num">11</td></tr>
+          <tr class="top-row"><td>3</td><td>dlp-admin@contoso.com (ポリシー管理者/通知先)</td><td>Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:71%"></div></div><span class="bar-label">15</span></div></td><td class="num">15</td><td class="num">2</td><td class="num">13</td></tr>
+          <tr><td>4</td><td>tanaka@contoso.com</td><td>Finance</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:62%"></div></div><span class="bar-label">13</span></div></td><td class="num">13</td><td class="num">5</td><td class="num">8</td></tr>
+          <tr><td>5</td><td>sato@contoso.com</td><td>Highly Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:52%"></div></div><span class="bar-label">11</span></div></td><td class="num">11</td><td class="num">8</td><td class="num">3</td></tr>
+          <tr><td>6</td><td>ito@contoso.com</td><td>Confidential</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:43%"></div></div><span class="bar-label">9</span></div></td><td class="num">9</td><td class="num">3</td><td class="num">6</td></tr>
+          <tr><td>7</td><td>APP@SHAREPOINT (システム)</td><td>General</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:38%"></div></div><span class="bar-label">8</span></div></td><td class="num">8</td><td class="num">0</td><td class="num">8</td></tr>
+          <tr><td>8</td><td>kobayashi@contoso.com</td><td>Finance</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:33%"></div></div><span class="bar-label">7</span></div></td><td class="num">7</td><td class="num">2</td><td class="num">5</td></tr>
+          <tr><td>9</td><td>watanabe@contoso.com</td><td>ラベルなし/不明</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:29%"></div></div><span class="bar-label">6</span></div></td><td class="num">6</td><td class="num">1</td><td class="num">5</td></tr>
+          <tr><td>10</td><td>kato@contoso.com</td><td>General</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:24%"></div></div><span class="bar-label">5</span></div></td><td class="num">5</td><td class="num">1</td><td class="num">4</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        上位 2 ユーザーで 38 件を占め、特に <strong>yamada@contoso.com</strong> は USB 操作を中心に 15 件がブロックされています。
+        「ポリシー管理者/通知先」および「システム」の行は SharePoint のイベントベースコンテンツスキャンによる検知で、
+        表示 UPN は実操作者ではありません。実ユーザー UPN はエンドポイントやメールなど対話的な操作で記録されます。
+      </div>
+
+      <div class="sub-title">3-5. ファイル分析（種別・ファイル名・ディレクトリ）</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>ファイル種別</th><th style="width:24%">今週（比率）</th><th class="num">今週</th><th class="num">前週</th><th class="num">増減</th><th>主なワークロード</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>Excel/表計算</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:100%"></div></div><span class="bar-label">32</span></div></td><td class="num">32</td><td class="num">24</td><td class="num delta-up">+8</td><td>OneDrive / Endpoint</td></tr>
+          <tr class="top-row"><td>Word</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-strong" style="width:78%"></div></div><span class="bar-label">25</span></div></td><td class="num">25</td><td class="num">22</td><td class="num delta-up">+3</td><td>SharePoint</td></tr>
+          <tr class="top-row"><td>PDF</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-mid" style="width:59%"></div></div><span class="bar-label">19</span></div></td><td class="num">19</td><td class="num">16</td><td class="num delta-up">+3</td><td>Exchange / Endpoint</td></tr>
+          <tr><td>PowerPoint</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:38%"></div></div><span class="bar-label">12</span></div></td><td class="num">12</td><td class="num">10</td><td class="num delta-up">+2</td><td>Teams / SharePoint</td></tr>
+          <tr><td>テキスト</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:16%"></div></div><span class="bar-label">5</span></div></td><td class="num">5</td><td class="num">3</td><td class="num delta-up">+2</td><td>Endpoint</td></tr>
+          <tr><td>圧縮ファイル</td><td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-light" style="width:9%"></div></div><span class="bar-label">3</span></div></td><td class="num">3</td><td class="num">2</td><td class="num delta-up">+1</td><td>Endpoint</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        AlertInfo / AlertEvidence で確認できたファイル証拠は今週 96 件で、Excel/表計算が 32 件と最多でした。
+        財務関連の Excel ファイルが「財務情報の外部共有制御」ルールに集中し、同一ファイルの反復試行も確認されています。
+        ファイル証拠は DLP ルールでアラート生成が有効なイベントのみを対象とするため、総アラート数とは一致しません。
+      </div>
+
+      <div class="sub-title" style="font-size:13px;border-left-color:#6BB1EA;">今週の流出ファイル一覧（ファイル名 × DLP ルール × ディレクトリ、Top 20）</div>
+      <div class="table-scroll"><table>
+        <thead>
+          <tr><th>ファイル種別</th><th>ファイル名</th><th>対象 DLP アラートルール</th><th>ディレクトリ</th><th class="num">件数</th></tr>
+        </thead>
+        <tbody>
+          <tr class="top-row"><td>Excel/表計算</td><td>2026Q3_売上予測.xlsx</td><td>財務情報の外部共有制御</td><td class="path">C:\Users\yamada\OneDrive - Contoso\Finance\Forecast</td><td class="num">6</td></tr>
+          <tr class="top-row"><td>Excel/表計算</td><td>取引先口座一覧.xlsx</td><td>銀行口座情報の持ち出し防止</td><td class="path">https://contoso.sharepoint.com/sites/Finance/Shared Documents/Payments</td><td class="num">5</td></tr>
+          <tr class="top-row"><td>PDF</td><td>カード決済申込書.pdf</td><td>カード番号の外部送信ブロック</td><td class="path">C:\Users\sato\Documents\Applications</td><td class="num">4</td></tr>
+          <tr><td>Word</td><td>個人番号取扱台帳.docx</td><td>マイナンバー情報の共有制御</td><td class="path">https://contoso.sharepoint.com/sites/HR/Shared Documents/Restricted</td><td class="num">4</td></tr>
+          <tr><td>Excel/表計算</td><td>海外送金先マスタ.csv</td><td>財務情報の外部共有制御</td><td class="path">C:\Users\tanaka\Downloads\Export</td><td class="num">3</td></tr>
+          <tr><td>PowerPoint</td><td>新製品ロードマップ.pptx</td><td>機密資料の社外共有防止</td><td class="path">https://contoso.sharepoint.com/sites/Product/Shared Documents/Roadmap</td><td class="num">3</td></tr>
+          <tr><td>Word</td><td>顧客契約書_最終版.docx</td><td>個人情報を含む文書の保護</td><td class="path">C:\Users\suzuki\OneDrive - Contoso\Contracts</td><td class="num">2</td></tr>
+          <tr><td>PDF</td><td>パスポート写し_出張者.pdf</td><td>本人確認情報の持ち出し防止</td><td class="path">https://contoso.sharepoint.com/sites/Travel/Shared Documents/Applications</td><td class="num">2</td></tr>
+          <tr><td>テキスト</td><td>dlp-test-creditcard.txt</td><td>カード番号の外部送信ブロック</td><td class="path">C:\Users\ito\Desktop\DLPTest</td><td class="num">2</td></tr>
+          <tr><td>圧縮ファイル</td><td>月次請求データ.zip</td><td>財務情報の外部共有制御</td><td class="path">C:\Users\yamada\Documents\Archive</td><td class="num">2</td></tr>
+          <tr><td>Excel/表計算</td><td>給与振込データ.xlsx</td><td>銀行口座情報の持ち出し防止</td><td class="path">https://contoso.sharepoint.com/sites/HR/Shared Documents/Payroll</td><td class="num">1</td></tr>
+          <tr><td>Word</td><td>提案書_顧客情報含む.docx</td><td>個人情報を含む文書の保護</td><td class="path">https://contoso.sharepoint.com/sites/Sales/Shared Documents/Proposals</td><td class="num">1</td></tr>
+        </tbody>
+      </table></div>
+      <div class="comment">
+        <strong>2026Q3_売上予測.xlsx</strong> が 6 件で最多となり、「財務情報の外部共有制御」ルールへの反復一致が見られます。
+        上位ファイルは Finance / HR フォルダーに集中しています。ローカルパスでは USB・印刷操作、SharePoint URL では
+        外部共有やダウンロードに関連するイベントを優先して調査してください。
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="footer">
+      本レポートは Security Copilot エージェント（PurviewDlpWeeklyReport）により自動生成されました。<br>
+      データソース: Microsoft Defender CloudAppEvents（Purview DLP 監査ログ）/ AlertInfo / AlertEvidence&nbsp;·&nbsp;
+      生成日時: 2026-08-03 06:00 JST&nbsp;·&nbsp;
+      <strong>機密 — 社内限定</strong>&nbsp;·&nbsp;
+      ※ 本ファイルはダミーデータによるサンプルです。
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
