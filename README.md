@@ -136,7 +136,8 @@ DLP ルール一致レコードのアクションに基づいて判定します�
 
 ## KQL スキル一覧
 
-すべて **Target: Defender**（Advanced Hunting）で `CloudAppEvents` を対象とし、
+すべて **Target: Defender**（Advanced Hunting）です。DLP アクティビティ集計の4スキルは
+`CloudAppEvents`、ファイル分析の2スキルは `AlertInfo` / `AlertEvidence` を対象とし、
 週次（過去 7 日）と前週（過去 7〜14 日）の比較のため過去 14 日間を集計します。
 
 | スキル | 目的 | レポート項目 |
@@ -145,7 +146,7 @@ DLP ルール一致レコードのアクションに基づいて判定します�
 | `GetDlpBySensitiveInfoType` | 機密情報の種類（SIT）別の検知数（今週/前週 × 判定） | 3-2. 機密情報の種類毎 |
 | `GetDlpByEgressChannel` | 持ち出し経路（SharePoint/OneDrive/Teams/Exchange/USB/印刷）別の検知数・判定・ラベル | 3-3. 持ち出し経路分析 |
 | `GetDlpByUserAndLabel` | ユーザー × 適用ラベル別の DLP アラート数（ブロック/検知）、検知数降順 Top 10 | 3-4. ユーザー分析 |
-| `GetDlpFileStatistics` | 対象ファイルの種別（Excel/Word/PDF 等）別の件数と、種別ごとのファイル名・フォルダパス（CloudAppEvents） | 3-5. ファイル分析 |
+| `GetDlpFileStatistics` | DLP アラートのファイル証拠を、種別（Excel/Word/PDF 等）× アプリケーション/検出元 × 週別に集計（**Defender AlertInfo / AlertEvidence**） | 3-5. ファイル分析 |
 | `GetDlpAlertFileEvidence` | DLP アラートのファイル証拠：**今週のみ**、ファイル名×DLPルール×ディレクトリ別の件数 Top 20（**Defender AlertInfo / AlertEvidence**） | 3-5. ファイル分析 |
 
 ### DLP イベントの識別とラベル抽出
@@ -220,24 +221,35 @@ SIT は `RawEventData.PolicyDetails[]` を `mv-expand` で展開して抽出し�
 
 ### ファイル分析（種別・パス）
 
-DLP アラートの対象ファイルは、まず **CloudAppEvents**（`GetDlpFileStatistics`）から抽出します。
-ファイル名・パスは `SharePointMetaData.FileName` / `.FilePathUrl`、`EndpointMetaData`、`ObjectId` を
-優先順で参照し、拡張子から種別（Excel / Word / PDF / PowerPoint / テキスト 等）を判定、
-`url_decode` + `parse_path` でフォルダパスを抽出します。
+DLP アラートの対象ファイルは、Defender の **`AlertInfo`** と **`AlertEvidence`** を `AlertId` で結合して
+抽出します（`GetDlpFileStatistics`）。`AlertInfo.ServiceSource == "Microsoft Data Loss Prevention"` で
+DLP アラートを限定し、`AlertEvidence.EntityType == "File"` の `FileName` / `FolderPath` を使用します。
+アラート発生時刻を基準に今週/前週へ分け、拡張子から種別（Excel / Word / PDF / PowerPoint /
+テキスト等）を判定します。`Workload` 出力列には `AlertEvidence.Application`、空の場合は
+`DetectionSource` を格納します。
 
 ```kusto
-| extend FileName = coalesce(tostring(RawEventData.SharePointMetaData.FileName),
-                             tostring(parse_json(tostring(RawEventData.EndpointMetaData)).ObjectId),
-                             tostring(RawEventData.ObjectName), tostring(RawEventData.ObjectId))
-| extend FilePathRaw = coalesce(tostring(RawEventData.SharePointMetaData.FilePathUrl),
-                                tostring(parse_json(tostring(RawEventData.EndpointMetaData)).TargetFilePath), "")
-| extend Folder = tostring(parse_path(url_decode(FilePathRaw)).DirectoryPath)
+let dlpAlerts = AlertInfo
+    | where Timestamp > ago(14d)
+    | where ServiceSource == "Microsoft Data Loss Prevention"
+    | summarize AlertTimestamp = max(Timestamp) by AlertId
+    | extend Week = iff(AlertTimestamp > ago(7d), "今週", "前週")
+    | project AlertId, Week;
+AlertEvidence
+| where Timestamp > ago(14d)
+| where EntityType =~ "File" and isnotempty(FileName)
+| project AlertId, FileName = url_decode(FileName), Folder = url_decode(FolderPath),
+    Workload = coalesce(Application, DetectionSource, "不明")
+| join kind=inner (dlpAlerts) on AlertId
 | extend FileExt = tolower(extract(@"\.([A-Za-z0-9]{1,6})$", 1, FileName))
 | extend FileType = case(FileExt in ("xlsx","xls","csv"), "Excel/表計算",
                          FileExt in ("docx","doc"), "Word", FileExt == "pdf", "PDF",
                          FileExt in ("pptx","ppt"), "PowerPoint", FileExt in ("txt","rtf"), "テキスト",
-                         isnotempty(FileExt), strcat("その他 (.", FileExt, ")"), "不明")
+       isnotempty(FileExt), strcat("その他 (.", FileExt, ")"), "種別不明")
 ```
+
+> DLP ルールでアラート生成が無効な場合、`CloudAppEvents` にルール一致が存在しても
+> `AlertInfo` / `AlertEvidence` には出力されないため、ファイル分析は「データなし」になります。
 
 #### DLP アラートのファイル証拠（Defender AlertInfo / AlertEvidence）
 

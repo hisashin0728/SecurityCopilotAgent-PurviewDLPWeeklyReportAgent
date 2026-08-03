@@ -120,7 +120,8 @@ SkillGroups:
                （ブロック / 検知）を Top 10 で取得する。→ ユーザー分析に使用する。
             5. **GetDlpFileStatistics** を呼び出し、DLP アラートの対象ファイルを、
                ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）× ワークロード × 週別に
-               集計し、主なファイルパス（フォルダ）も取得する。→ ファイル分析に使用する。
+              AlertInfo / AlertEvidence から集計し、主なファイルパス（フォルダ）も取得する。
+              → ファイル分析に使用する。
             6. **GetDlpAlertFileEvidence** を呼び出し、Defender の AlertInfo（DLP アラート）と
                AlertEvidence を結合して、DLP アラートの対象ファイル（EntityType=File）の
                ファイル名・格納フォルダをファイル種別別に取得する
@@ -183,8 +184,8 @@ SkillGroups:
             実ユーザー UPN はエンドポイント/メール DLP など対話的な操作のイベントで・すべき発生することも追記する。
 
             ##### 3-5. ファイル分析（種別・ファイル名・ディレクトリ）
-            DLP アラートの対象となったファイルを、GetDlpFileStatistics（CloudAppEvents）および
-            GetDlpAlertFileEvidence（AlertInfo / AlertEvidence）の結果から集計する。
+            DLP アラートの対象となったファイルを、GetDlpFileStatistics および
+            GetDlpAlertFileEvidence（いずれも AlertInfo / AlertEvidence）の結果から集計する。
             - **ファイル種別別サマリ**: ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）|
               今週 | 前週 | 件数 | 主なワークロード のテーブルと横棒グラフ（CSS）。
             - **今週の流出ファイル一覧（ファイル名×DLPルール×ディレクトリ、Top 20、必須）**:
@@ -442,34 +443,32 @@ SkillGroups:
             | sort by Detections desc
             | take 10
 
-      # ---- ファイル分析（種別・パス）: CloudAppEvents ----
+      # ---- ファイル分析（種別・パス）: Defender AlertInfo / AlertEvidence ----
       - Name: GetDlpFileStatistics
         DisplayName: Get DLP File Statistics (Type and Path)
         Description: >-
-          CloudAppEvents の Purview DLP アラート（DLPRuleMatch / DLPRuleUndo）の対象ファイルを、
+          Defender の AlertInfo（ServiceSource=Microsoft Data Loss Prevention）と AlertEvidence を結合し、
+          過去 14 日間の DLP アラートの対象ファイル（EntityType=File）を、
           ファイル種別（Excel / Word / PDF / PowerPoint / テキスト 等）× ワークロード × 週別に集計し、
-          ファイルパス（フォルダ）とサンプルファイル名も返します。ファイル名・パスは
-          SharePointMetaData.FileName / FilePathUrl、EndpointMetaData、ObjectId から抽出します。
+          AlertEvidence の FileName / FolderPath からサンプルファイル名とフォルダも返します。
+          DLP ポリシーでアラート生成が無効な場合、このスキルの結果は 0 件になります。
         Settings:
           Target: Defender
           Template: |-
-            let dlpOps = dynamic(["DLPRuleMatch", "DLPRuleUndo"]);
-            CloudAppEvents
+            let dlpAlerts = AlertInfo
+                | where Timestamp > ago(14d)
+                | where ServiceSource == "Microsoft Data Loss Prevention"
+                | summarize AlertTimestamp = max(Timestamp) by AlertId
+                | extend Week = iff(AlertTimestamp > ago(7d), "今週", "前週")
+                | project AlertId, Week;
+            AlertEvidence
             | where Timestamp > ago(14d)
-            | where tostring(RawEventData.Operation) in (dlpOps)
-            | extend Week = iff(Timestamp > ago(7d), "今週", "前週")
-            | extend Workload = coalesce(tostring(RawEventData.Workload), Application, "不明")
-            | extend FileName = coalesce(tostring(RawEventData.SharePointMetaData.FileName),
-                                         tostring(parse_json(tostring(RawEventData.EndpointMetaData)).ObjectId),
-                                         tostring(RawEventData.ObjectName),
-                                         tostring(RawEventData.ObjectId))
-            | extend FilePathRaw = coalesce(tostring(RawEventData.SharePointMetaData.FilePathUrl),
-                                            tostring(parse_json(tostring(RawEventData.EndpointMetaData)).TargetFilePath),
-                                            tostring(parse_json(tostring(RawEventData.EndpointMetaData)).FilePath),
-                                            "")
-            | extend FilePathDecoded = iff(isnotempty(FilePathRaw), url_decode(FilePathRaw), "")
-            | extend Folder = iff(isnotempty(FilePathDecoded), tostring(parse_path(FilePathDecoded).DirectoryPath), "")
-            | extend FileName = iff(isnotempty(FileName), url_decode(FileName), FileName)
+            | where EntityType =~ "File" and isnotempty(FileName)
+            | project AlertId,
+                      FileName = url_decode(FileName),
+                      Folder = url_decode(FolderPath),
+                      Workload = coalesce(Application, DetectionSource, "不明")
+            | join kind=inner (dlpAlerts) on AlertId
             | extend FileExt = tolower(extract(@"\.([A-Za-z0-9]{1,6})$", 1, FileName))
             | extend FileType = case(
                 FileExt in ("xlsx","xls","xlsm","xlsb","csv"), "Excel/表計算",
@@ -480,7 +479,7 @@ SkillGroups:
                 FileExt in ("zip","rar","7z"), "圧縮ファイル",
                 FileExt in ("png","jpg","jpeg","gif","bmp","tif","tiff"), "画像",
                 isnotempty(FileExt), strcat("その他 (.", FileExt, ")"),
-                "不明")
+                "種別不明")
             | extend FileLocation = strcat(FileName, "  ←  ", Folder)
             | summarize Count = count(),
                         Files = make_set(FileName, 15),
